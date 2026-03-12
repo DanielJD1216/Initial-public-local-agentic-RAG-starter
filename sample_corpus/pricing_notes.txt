@@ -1,0 +1,6 @@
+Acme Services Pricing Notes
+
+The standard monthly plan costs $399 per month.
+The annual plan includes a 12 percent discount and one onboarding session.
+Teams with more than 5 employees can request custom onboarding.
+Every new customer gets a 14 day trial before the first invoice.

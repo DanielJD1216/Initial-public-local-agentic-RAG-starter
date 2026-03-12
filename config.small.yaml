@@ -1,0 +1,47 @@
+version: 1
+project_name: "Local Agentic RAG Starter"
+
+paths:
+  documents: "./sample_corpus"
+  database: "./.rag_local/rag.sqlite3"
+  vector_index: "./.rag_local/vector.index"
+  vector_metadata: "./.rag_local/vector.meta.json"
+  cache_dir: "./.rag_local/cache"
+
+models:
+  profile: "small"
+  chat_model: "qwen3:4b"
+  embedding_model: "nomic-embed-text"
+  base_url: "http://127.0.0.1:11434"
+  request_timeout_seconds: 300
+  disable_thinking: true
+
+retrieval:
+  top_k: 6
+  keyword_k: 10
+  vector_k: 10
+  max_chunk_tokens: 260
+  overlap_tokens: 40
+  min_evidence_score: 0.42
+  rrf_k: 60
+  vector_backend: "faiss"
+
+permissions:
+  enabled: false
+  default_access_scope: "public"
+  default_access_principals:
+    - "*"
+  active_principals:
+    - "*"
+
+ui:
+  host: "127.0.0.1"
+  port: 8501
+
+web:
+  host: "127.0.0.1"
+  port: 3000
+
+mcp:
+  host: "127.0.0.1"
+  port: 8000
