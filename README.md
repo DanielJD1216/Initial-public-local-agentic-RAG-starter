@@ -46,7 +46,7 @@ local-rag ask "What is the standard support first response time?" --trace
 ### Manual fallback
 
 ```bash
-python3.11 -m venv .venv
+python3 -m venv .venv
 source .venv/bin/activate
 pip install --upgrade pip
 pip install -r requirements-dev.txt
@@ -71,6 +71,7 @@ Important defaults:
 - permissions are stored on every record, but enforcement starts disabled
 
 You can override key settings through environment variables in `.env`.
+The shipped `.env.example` leaves every override commented out so alternate YAML configs still work as expected after bootstrap.
 For a public repo, keep the checked-in configs as safe defaults and put your real document paths or private overrides in an untracked `config.local.yaml`.
 
 ## Metadata contract
