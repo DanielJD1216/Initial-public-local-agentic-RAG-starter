@@ -234,6 +234,7 @@ class AnswerResult:
     trace: AgentTrace
     retrieved_chunks: list[ChunkRecord]
     status: str = "ok"
+    blocked_principals: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -244,4 +245,5 @@ class AnswerResult:
             "trace": self.trace.to_dict(),
             "retrieved_chunks": [chunk.to_dict() for chunk in self.retrieved_chunks],
             "status": self.status,
+            "blocked_principals": self.blocked_principals,
         }

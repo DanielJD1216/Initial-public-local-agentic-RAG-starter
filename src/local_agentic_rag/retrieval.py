@@ -33,14 +33,79 @@ class HybridRetriever:
         self.vector_index.build(vectors, embedding_model=self.config.models.embedding_model)
 
     def search(self, query: str, *, query_type: str, active_principals: list[str]) -> RetrievalAttempt:
+        return self._search(
+            query,
+            query_type=query_type,
+            active_principals=active_principals,
+            permissions_enabled=self.config.permissions.enabled,
+        )
+
+    def detect_permission_block(self, query: str, *, query_type: str, active_principals: list[str]) -> list[str]:
+        if not self.config.permissions.enabled:
+            return []
+        shadow_attempt = self._search(
+            query,
+            query_type=query_type,
+            active_principals=active_principals,
+            permissions_enabled=False,
+        )
+        if not shadow_attempt.fused_hits:
+            return []
+        accessible_hits: list[RetrievalHit] = []
+        blocked_hits: list[RetrievalHit] = []
+        for hit in shadow_attempt.fused_hits:
+            if is_accessible(
+                access_scope=hit.chunk.access_scope,
+                access_principals=hit.chunk.access_principals,
+                active_principals=active_principals,
+                permissions_enabled=True,
+            ):
+                accessible_hits.append(hit)
+            else:
+                blocked_hits.append(hit)
+        if not blocked_hits:
+            return []
+        top_blocked_rank = blocked_hits[0].rank
+        top_accessible_rank = accessible_hits[0].rank if accessible_hits else 999
+        top_blocked_score = blocked_hits[0].score
+        top_accessible_score = accessible_hits[0].score if accessible_hits else 0.0
+        blocked_dominates = (
+            not accessible_hits
+            or top_blocked_rank < top_accessible_rank
+            or (top_blocked_rank <= 2 and top_blocked_score >= top_accessible_score)
+        )
+        if not blocked_dominates:
+            return []
+        principals = sorted(
+            {
+                principal
+                for hit in blocked_hits
+                for principal in hit.chunk.access_principals
+                if principal != "*" and principal not in active_principals
+            }
+        )
+        return principals
+
+    def _search(
+        self,
+        query: str,
+        *,
+        query_type: str,
+        active_principals: list[str],
+        permissions_enabled: bool,
+    ) -> RetrievalAttempt:
         keyword_hits = self.store.keyword_search(
             query,
             limit=self.config.retrieval.keyword_k,
-            permissions_enabled=self.config.permissions.enabled,
+            permissions_enabled=permissions_enabled,
             active_principals=active_principals,
         )
         query_vector = self.embedding_client.embed_texts([query])[0]
-        vector_hits = self._vector_search(query_vector, active_principals=active_principals)
+        vector_hits = self._vector_search(
+            query_vector,
+            active_principals=active_principals,
+            permissions_enabled=permissions_enabled,
+        )
         fused_hits = self._fuse_hits(keyword_hits, vector_hits)
         evidence_score = _evidence_score(keyword_hits, vector_hits, fused_hits)
         return RetrievalAttempt(
@@ -52,7 +117,13 @@ class HybridRetriever:
             evidence_score=evidence_score,
         )
 
-    def _vector_search(self, query_vector: list[float], *, active_principals: list[str]) -> list[RetrievalHit]:
+    def _vector_search(
+        self,
+        query_vector: list[float],
+        *,
+        active_principals: list[str],
+        permissions_enabled: bool,
+    ) -> list[RetrievalHit]:
         overfetch = max(self.config.retrieval.vector_k * 4, 20)
         raw_hits: list[VectorHit] = self.vector_index.search(query_vector, limit=overfetch)
         chunk_lookup = self.store.get_chunks_by_ids([hit.chunk_id for hit in raw_hits])
@@ -61,11 +132,11 @@ class HybridRetriever:
             chunk = chunk_lookup.get(hit.chunk_id)
             if chunk is None:
                 continue
-            if not is_accessible(
+            if permissions_enabled and not is_accessible(
                 access_scope=chunk.access_scope,
                 access_principals=chunk.access_principals,
                 active_principals=active_principals,
-                permissions_enabled=self.config.permissions.enabled,
+                permissions_enabled=True,
             ):
                 continue
             filtered.append(

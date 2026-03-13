@@ -82,6 +82,8 @@ def test_web_server_status_ingest_and_permission_flow(tmp_path) -> None:
     )
     assert blocked.status_code == 200
     assert not blocked.json()["grounded"]
+    assert blocked.json()["status"] == "restricted"
+    assert blocked.json()["blocked_principals"] == ["finance", "owners"]
 
     allowed = client.post(
         "/api/ask",

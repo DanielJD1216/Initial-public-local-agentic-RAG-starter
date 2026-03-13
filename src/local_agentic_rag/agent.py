@@ -59,6 +59,19 @@ class TransparentRAGAgent:
 
         if best_attempt.evidence_score < (self.config.retrieval.min_evidence_score / 2):
             trace.verification_notes.append("Evidence score below abstention threshold.")
+            blocked_principals = self.retriever.detect_permission_block(
+                best_attempt.query,
+                query_type=best_attempt.query_type,
+                active_principals=active_principals,
+            )
+            if blocked_principals:
+                trace.verification_notes.append("Matching evidence exists but is blocked by permission filtering.")
+                return self._restricted_result(
+                    question=question,
+                    trace=trace,
+                    attempt=best_attempt,
+                    blocked_principals=blocked_principals,
+                )
             return AnswerResult(
                 question=question,
                 answer="I couldn't ground a reliable answer in the indexed documents. Try a more specific question or reindex the corpus.",
@@ -101,6 +114,19 @@ class TransparentRAGAgent:
             and has_keyword_grounding(question, citation_chunks)
         )
         if not grounded:
+            blocked_principals = self.retriever.detect_permission_block(
+                best_attempt.query,
+                query_type=best_attempt.query_type,
+                active_principals=active_principals,
+            )
+            if blocked_principals:
+                trace.verification_notes.append("Matching evidence exists but is blocked by permission filtering.")
+                return self._restricted_result(
+                    question=question,
+                    trace=trace,
+                    attempt=best_attempt,
+                    blocked_principals=blocked_principals,
+                )
             trace.verification_notes.append("Model response was not sufficiently grounded or cited.")
             return AnswerResult(
                 question=question,
@@ -120,6 +146,34 @@ class TransparentRAGAgent:
             citations=citations,
             trace=trace,
             retrieved_chunks=[hit.chunk for hit in best_attempt.fused_hits],
+        )
+
+    def _restricted_result(
+        self,
+        *,
+        question: str,
+        trace: AgentTrace,
+        attempt: RetrievalAttempt,
+        blocked_principals: list[str],
+    ) -> AnswerResult:
+        principal_hint = ", ".join(blocked_principals)
+        next_step = (
+            f"Try Access view > Custom and enable: {principal_hint}."
+            if principal_hint
+            else "Try an access view with the required principals."
+        )
+        return AnswerResult(
+            question=question,
+            answer=(
+                "Restricted. Your current access view does not allow one or more matching documents. "
+                f"{next_step}"
+            ),
+            grounded=False,
+            citations=[],
+            trace=trace,
+            retrieved_chunks=[hit.chunk for hit in attempt.fused_hits],
+            status="restricted",
+            blocked_principals=blocked_principals,
         )
 
     def _rewrite_query(self, question: str, attempt: RetrievalAttempt) -> str:

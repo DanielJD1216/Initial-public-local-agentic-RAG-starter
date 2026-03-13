@@ -831,6 +831,8 @@ export default function App() {
                   <div className="flex items-center gap-2">
                     {deferredResult?.grounded ? (
                       <Badge variant="success">Grounded</Badge>
+                    ) : deferredResult?.status === "restricted" ? (
+                      <Badge variant="warning">Restricted</Badge>
                     ) : deferredResult ? (
                       <Badge variant="warning">Abstained</Badge>
                     ) : (
@@ -856,7 +858,17 @@ export default function App() {
               <CardContent>
                 {deferredResult ? (
                   <div className="space-y-4">
-                    {!deferredResult.grounded && (
+                    {!deferredResult.grounded && deferredResult.status === "restricted" && (
+                      <StatusBanner
+                        tone="error"
+                        message={
+                          deferredResult.blocked_principals.length > 0
+                            ? `Restricted. Your current access view cannot use one or more matching documents. Try Custom and enable: ${deferredResult.blocked_principals.join(", ")}.`
+                            : "Restricted. Your current access view cannot use one or more matching documents."
+                        }
+                      />
+                    )}
+                    {!deferredResult.grounded && deferredResult.status !== "restricted" && (
                       <StatusBanner
                         tone="warning"
                         message="The model found related material but withheld a definitive answer because grounding was insufficient."

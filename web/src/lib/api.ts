@@ -106,6 +106,7 @@ export type AskResponse = {
   trace: Record<string, unknown>;
   retrieved_chunks: RetrievedChunk[];
   status: string;
+  blocked_principals: string[];
 };
 
 export type ApplyModelSettingsResponse = {

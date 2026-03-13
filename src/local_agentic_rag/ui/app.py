@@ -161,6 +161,14 @@ def _render_result(st, *, result, active_principals: list[str], debug: bool) -> 
     st.subheader("Answer")
     if result.grounded:
         st.success("Grounded answer with citations.")
+    elif result.status == "restricted":
+        if result.blocked_principals:
+            st.error(
+                "Restricted. Your current access view cannot use one or more matching documents. "
+                f"Try a view that includes: {', '.join(result.blocked_principals)}."
+            )
+        else:
+            st.error("Restricted. Your current access view cannot use one or more matching documents.")
     else:
         st.warning("The assistant withheld a definitive answer because grounding was insufficient.")
     st.caption(f"Answered with principals: {_format_principals(active_principals)}")

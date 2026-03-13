@@ -13,6 +13,8 @@ def test_permissions_and_reindex(tmp_path: Path) -> None:
         active_principals=["staff"],
     )
     assert not restricted.grounded
+    assert restricted.status == "restricted"
+    assert restricted.blocked_principals == ["finance", "owners"]
     assert restricted.citations == []
 
     allowed = runtime.agent.answer(

@@ -39,6 +39,8 @@ def test_unlabeled_confidential_doc_is_auto_restricted_for_public_queries(tmp_pa
         active_principals=["*"],
     )
     assert not public_result.grounded
+    assert public_result.status == "restricted"
+    assert public_result.blocked_principals == ["owners"]
 
     owner_result = runtime.agent.answer(
         "When does the bonus review window open?",
