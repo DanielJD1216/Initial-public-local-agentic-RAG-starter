@@ -15,6 +15,18 @@ def run_mcp_server(config_path: str | None = None) -> None:
     server = FastMCP("local-agentic-rag")
 
     @server.tool()
+    def get_runtime_status() -> dict[str, object]:
+        return tools.get_runtime_status()
+
+    @server.tool()
+    def ingest_path(
+        path: str,
+        prune_missing: bool = True,
+        force_embeddings: bool = False,
+    ) -> dict[str, object]:
+        return tools.ingest_path(path, prune_missing=prune_missing, force_embeddings=force_embeddings)
+
+    @server.tool()
     def search_documents(query: str, top_k: int = 5, principals: list[str] | None = None) -> dict[str, object]:
         return tools.search_documents(query, top_k=top_k, principals=principals)
 

@@ -7,7 +7,7 @@ from pathlib import Path
 
 import numpy as np
 
-from .models import ChunkRecord, CorpusSummary, DocumentMetadata, RetrievalHit
+from .models import ChunkRecord, CorpusIngestSummary, CorpusSummary, DocumentMetadata, RetrievalHit
 
 FTS_STOPWORDS = {
     "a",
@@ -55,7 +55,11 @@ class SQLiteStore:
                     access_scope TEXT NOT NULL,
                     access_principals TEXT NOT NULL,
                     file_size_bytes INTEGER NOT NULL,
-                    modified_at TEXT NOT NULL
+                    modified_at TEXT NOT NULL,
+                    ingest_mode TEXT NOT NULL DEFAULT 'local',
+                    ingest_model TEXT NOT NULL DEFAULT 'local-heuristic',
+                    ingest_fingerprint TEXT NOT NULL DEFAULT 'legacy-local',
+                    chunking_strategy TEXT NOT NULL DEFAULT 'heuristic'
                 );
 
                 CREATE TABLE IF NOT EXISTS chunks (
@@ -125,6 +129,7 @@ class SQLiteStore:
                 INSERT INTO chunk_fts(chunk_fts) VALUES ('rebuild');
                 """
             )
+            self._ensure_document_columns(connection)
 
     def upsert_document(self, document: DocumentMetadata) -> None:
         document.validate()
@@ -142,8 +147,12 @@ class SQLiteStore:
                     access_scope,
                     access_principals,
                     file_size_bytes,
-                    modified_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    modified_at,
+                    ingest_mode,
+                    ingest_model,
+                    ingest_fingerprint,
+                    chunking_strategy
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(doc_id) DO UPDATE SET
                     source_path = excluded.source_path,
                     content_type = excluded.content_type,
@@ -154,7 +163,11 @@ class SQLiteStore:
                     access_scope = excluded.access_scope,
                     access_principals = excluded.access_principals,
                     file_size_bytes = excluded.file_size_bytes,
-                    modified_at = excluded.modified_at
+                    modified_at = excluded.modified_at,
+                    ingest_mode = excluded.ingest_mode,
+                    ingest_model = excluded.ingest_model,
+                    ingest_fingerprint = excluded.ingest_fingerprint,
+                    chunking_strategy = excluded.chunking_strategy
                 """,
                 (
                     document.doc_id,
@@ -168,6 +181,10 @@ class SQLiteStore:
                     json.dumps(document.access_principals),
                     document.file_size_bytes,
                     document.modified_at,
+                    document.ingest_mode,
+                    document.ingest_model,
+                    document.ingest_fingerprint,
+                    document.chunking_strategy,
                 ),
             )
 
@@ -196,8 +213,12 @@ class SQLiteStore:
                     access_scope,
                     access_principals,
                     file_size_bytes,
-                    modified_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    modified_at,
+                    ingest_mode,
+                    ingest_model,
+                    ingest_fingerprint,
+                    chunking_strategy
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     document.doc_id,
@@ -211,6 +232,10 @@ class SQLiteStore:
                     json.dumps(document.access_principals),
                     document.file_size_bytes,
                     document.modified_at,
+                    document.ingest_mode,
+                    document.ingest_model,
+                    document.ingest_fingerprint,
+                    document.chunking_strategy,
                 ),
             )
             for chunk in chunks:
@@ -297,6 +322,10 @@ class SQLiteStore:
             access_principals=json.loads(row["access_principals"]),
             file_size_bytes=row["file_size_bytes"],
             modified_at=row["modified_at"],
+            ingest_mode=row["ingest_mode"],
+            ingest_model=row["ingest_model"],
+            ingest_fingerprint=row["ingest_fingerprint"],
+            chunking_strategy=row["chunking_strategy"],
         )
 
     def list_document_sources(self) -> set[str]:
@@ -330,6 +359,43 @@ class SQLiteStore:
             public_document_count=int(document_row["public_document_count"] or 0),
             restricted_document_count=int(document_row["restricted_document_count"] or 0),
             principals=[row["principal"] for row in principal_rows],
+        )
+
+    def get_corpus_ingest_summary(self) -> CorpusIngestSummary:
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT
+                    COUNT(*) AS document_count,
+                    CASE
+                        WHEN COUNT(DISTINCT ingest_mode) = 0 THEN NULL
+                        WHEN COUNT(DISTINCT ingest_mode) = 1 THEN MIN(ingest_mode)
+                        ELSE 'mixed'
+                    END AS ingest_mode,
+                    CASE
+                        WHEN COUNT(DISTINCT ingest_model) = 0 THEN NULL
+                        WHEN COUNT(DISTINCT ingest_model) = 1 THEN MIN(ingest_model)
+                        ELSE 'mixed'
+                    END AS ingest_model,
+                    CASE
+                        WHEN COUNT(DISTINCT ingest_fingerprint) = 0 THEN NULL
+                        WHEN COUNT(DISTINCT ingest_fingerprint) = 1 THEN MIN(ingest_fingerprint)
+                        ELSE 'mixed'
+                    END AS ingest_fingerprint,
+                    CASE
+                        WHEN COUNT(DISTINCT chunking_strategy) = 0 THEN NULL
+                        WHEN COUNT(DISTINCT chunking_strategy) = 1 THEN MIN(chunking_strategy)
+                        ELSE 'mixed'
+                    END AS chunking_strategy
+                FROM documents
+                """
+            ).fetchone()
+        return CorpusIngestSummary(
+            document_count=int(row["document_count"] or 0),
+            mode=row["ingest_mode"],
+            ingest_model=row["ingest_model"],
+            ingest_fingerprint=row["ingest_fingerprint"],
+            chunking_strategy=row["chunking_strategy"],
         )
 
     def get_chunks_by_ids(self, chunk_ids: list[str]) -> dict[str, ChunkRecord]:
@@ -369,6 +435,71 @@ class SQLiteStore:
         with self._connect() as connection:
             rows = connection.execute("SELECT DISTINCT embedding_model FROM chunk_embeddings").fetchall()
         return {row["embedding_model"] for row in rows}
+
+    def list_prompt_seed_chunks(
+        self,
+        *,
+        permissions_enabled: bool,
+        active_principals: list[str],
+        limit_docs: int = 6,
+        chunks_per_doc: int = 2,
+    ) -> list[ChunkRecord]:
+        document_access_clause = ""
+        access_params: list[object] = []
+        if permissions_enabled:
+            principal_placeholders = ", ".join("?" for _ in active_principals) or "?"
+            document_access_clause = f"""
+                WHERE (
+                    documents.access_scope = 'public'
+                    OR EXISTS (
+                        SELECT 1
+                        FROM json_each(documents.access_principals)
+                        WHERE json_each.value IN ({principal_placeholders})
+                    )
+                )
+            """
+            access_params.extend(active_principals or ["*"])
+
+        with self._connect() as connection:
+            document_rows = connection.execute(
+                f"""
+                SELECT doc_id
+                FROM documents
+                {document_access_clause}
+                ORDER BY
+                    CASE WHEN access_scope = 'restricted' THEN 0 ELSE 1 END,
+                    title COLLATE NOCASE
+                LIMIT ?
+                """,
+                (*access_params, limit_docs),
+            ).fetchall()
+            doc_ids = [row["doc_id"] for row in document_rows]
+            if not doc_ids:
+                return []
+            placeholders = ", ".join("?" for _ in doc_ids)
+            chunk_rows = connection.execute(
+                f"""
+                SELECT *
+                FROM chunks
+                WHERE doc_id IN ({placeholders})
+                """,
+                doc_ids,
+            ).fetchall()
+
+        selected_rows: list[sqlite3.Row] = []
+        per_doc_counts: dict[str, int] = {}
+        doc_order = {doc_id: index for index, doc_id in enumerate(doc_ids)}
+        ordered_chunk_rows = sorted(
+            chunk_rows,
+            key=lambda row: (doc_order.get(row["doc_id"], len(doc_order)), row["chunk_index"]),
+        )
+        for row in ordered_chunk_rows:
+            count = per_doc_counts.get(row["doc_id"], 0)
+            if count >= chunks_per_doc:
+                continue
+            selected_rows.append(row)
+            per_doc_counts[row["doc_id"]] = count + 1
+        return [self._row_to_chunk(row) for row in selected_rows]
 
     def keyword_search(
         self,
@@ -453,6 +584,22 @@ class SQLiteStore:
             line_end=row["line_end"],
             token_count=row["token_count"],
         )
+
+    def _ensure_document_columns(self, connection: sqlite3.Connection) -> None:
+        columns = {
+            row["name"]
+            for row in connection.execute("PRAGMA table_info(documents)").fetchall()
+        }
+        required_columns = {
+            "ingest_mode": "ALTER TABLE documents ADD COLUMN ingest_mode TEXT NOT NULL DEFAULT 'local'",
+            "ingest_model": "ALTER TABLE documents ADD COLUMN ingest_model TEXT NOT NULL DEFAULT 'local-heuristic'",
+            "ingest_fingerprint": "ALTER TABLE documents ADD COLUMN ingest_fingerprint TEXT NOT NULL DEFAULT 'legacy-local'",
+            "chunking_strategy": "ALTER TABLE documents ADD COLUMN chunking_strategy TEXT NOT NULL DEFAULT 'heuristic'",
+        }
+        for column_name, statement in required_columns.items():
+            if column_name in columns:
+                continue
+            connection.execute(statement)
 
 
 def _to_fts_query(query: str) -> str:

@@ -3,24 +3,24 @@
 @tailwind utilities;
 
 :root {
-  --background: 222 24% 8%;
-  --foreground: 210 20% 94%;
-  --card: 224 18% 11%;
-  --card-foreground: 210 20% 94%;
-  --primary: 191 92% 57%;
-  --primary-foreground: 222 47% 11%;
-  --secondary: 223 16% 17%;
-  --secondary-foreground: 210 20% 92%;
-  --muted: 223 16% 14%;
-  --muted-foreground: 215 16% 67%;
-  --accent: 191 84% 18%;
-  --accent-foreground: 190 90% 88%;
-  --destructive: 0 72% 56%;
-  --destructive-foreground: 210 20% 96%;
-  --border: 217 19% 20%;
-  --input: 217 19% 20%;
-  --ring: 191 92% 57%;
-  --radius: 0.95rem;
+  --background: 205 42% 97%;
+  --foreground: 216 31% 16%;
+  --card: 0 0% 100%;
+  --card-foreground: 216 31% 16%;
+  --primary: 197 83% 32%;
+  --primary-foreground: 0 0% 100%;
+  --secondary: 200 31% 94%;
+  --secondary-foreground: 214 26% 28%;
+  --muted: 205 28% 95%;
+  --muted-foreground: 214 17% 42%;
+  --accent: 196 63% 91%;
+  --accent-foreground: 198 72% 25%;
+  --destructive: 0 72% 52%;
+  --destructive-foreground: 0 0% 100%;
+  --border: 210 24% 86%;
+  --input: 210 24% 86%;
+  --ring: 197 83% 32%;
+  --radius: 1.15rem;
 }
 
 * {
@@ -28,16 +28,18 @@
 }
 
 html {
-  color-scheme: dark;
+  color-scheme: light;
 }
 
 body {
   @apply min-h-screen bg-background text-foreground antialiased;
-  font-family: "Avenir Next", "Segoe UI Variable", "Segoe UI", sans-serif;
+  font-family: "Avenir Next", "IBM Plex Sans", "Segoe UI Variable", "Segoe UI", sans-serif;
   background-image:
-    radial-gradient(circle at top left, rgba(34, 211, 238, 0.12), transparent 28%),
-    radial-gradient(circle at top right, rgba(45, 212, 191, 0.08), transparent 22%),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent 28%);
+    radial-gradient(circle at 0% 0%, rgba(56, 189, 248, 0.28), transparent 24%),
+    radial-gradient(circle at 100% 0%, rgba(251, 191, 36, 0.12), transparent 18%),
+    radial-gradient(circle at 14% 100%, rgba(125, 211, 252, 0.26), transparent 24%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(241, 247, 250, 0.96));
+  background-attachment: fixed;
 }
 
 code,
@@ -51,9 +53,96 @@ pre,
 }
 
 .glass-panel {
-  background: linear-gradient(180deg, rgba(20, 24, 32, 0.92), rgba(12, 16, 22, 0.92));
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.95), rgba(246, 250, 252, 0.9)),
+    linear-gradient(135deg, rgba(125, 211, 252, 0.08), transparent 45%);
+  box-shadow:
+    0 24px 60px rgba(15, 23, 42, 0.08),
+    0 1px 0 rgba(255, 255, 255, 0.92) inset;
+  backdrop-filter: blur(18px);
 }
 
 .metric-sheen {
-  background-image: linear-gradient(135deg, rgba(34, 211, 238, 0.12), rgba(15, 23, 42, 0));
+  background-image:
+    linear-gradient(135deg, rgba(125, 211, 252, 0.22), rgba(255, 255, 255, 0)),
+    radial-gradient(circle at top right, rgba(255, 255, 255, 0.85), transparent 34%);
+}
+
+.hero-panel {
+  position: relative;
+  overflow: hidden;
+}
+
+.hero-panel::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(circle at 88% 14%, rgba(255, 255, 255, 0.9), transparent 22%),
+    linear-gradient(125deg, rgba(255, 255, 255, 0.18), transparent 50%);
+  pointer-events: none;
+}
+
+.panel-kicker {
+  font-size: 0.68rem;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  color: hsl(var(--muted-foreground));
+}
+
+.tonal-card {
+  border: 1px solid rgba(211, 223, 235, 0.75);
+  border-radius: 1.35rem;
+  padding: 1rem;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.68), rgba(248, 251, 253, 0.64)),
+    linear-gradient(140deg, rgba(125, 211, 252, 0.08), transparent 48%);
+  box-shadow:
+    0 14px 32px rgba(15, 23, 42, 0.05),
+    0 1px 0 rgba(255, 255, 255, 0.9) inset;
+}
+
+.empty-state-shell {
+  border: 1px dashed rgba(186, 202, 219, 0.9);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.72), rgba(244, 248, 251, 0.55)),
+    radial-gradient(circle at top, rgba(125, 211, 252, 0.14), transparent 48%);
+}
+
+.sidebar-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(125, 145, 165, 0.55) transparent;
+}
+
+.sidebar-scroll::-webkit-scrollbar {
+  width: 10px;
+}
+
+.sidebar-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.sidebar-scroll::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+  background-color: rgba(125, 145, 165, 0.45);
+}
+
+.sidebar-scroll::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(96, 120, 142, 0.62);
+}
+
+input,
+textarea,
+select {
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.82) inset,
+    0 10px 24px rgba(15, 23, 42, 0.04);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  * {
+    scroll-behavior: smooth;
+  }
 }

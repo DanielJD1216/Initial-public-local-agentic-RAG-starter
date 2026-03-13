@@ -40,6 +40,10 @@ class DocumentMetadata:
     access_principals: list[str]
     file_size_bytes: int
     modified_at: str
+    ingest_mode: str
+    ingest_model: str
+    ingest_fingerprint: str
+    chunking_strategy: str
 
     def validate(self) -> None:
         required = {
@@ -51,6 +55,10 @@ class DocumentMetadata:
             "title": self.title,
             "ingested_at": self.ingested_at,
             "access_scope": self.access_scope,
+            "ingest_mode": self.ingest_mode,
+            "ingest_model": self.ingest_model,
+            "ingest_fingerprint": self.ingest_fingerprint,
+            "chunking_strategy": self.chunking_strategy,
         }
         missing = [name for name, value in required.items() if not str(value).strip()]
         if missing:
@@ -69,6 +77,27 @@ class CorpusSummary:
     public_document_count: int
     restricted_document_count: int
     principals: list[str]
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(slots=True)
+class PromptSuggestion:
+    label: str
+    prompt: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(slots=True)
+class CorpusIngestSummary:
+    document_count: int
+    mode: str | None
+    ingest_model: str | None
+    ingest_fingerprint: str | None
+    chunking_strategy: str | None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

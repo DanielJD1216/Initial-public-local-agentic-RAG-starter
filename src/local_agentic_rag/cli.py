@@ -43,6 +43,13 @@ def bootstrap(
         f"Embedding model `{app_config.models.embedding_model}`",
         "ok" if report.embedding_model_available else "missing",
     )
+    if report.ingest_mode == "bridge":
+        table.add_row(
+            f"Ingest bridge `{app_config.ingest.bridge_model}`",
+            "ok" if report.bridge_reachable else "missing",
+        )
+    else:
+        table.add_row("Ingest strategy", "local")
     table.add_row(f"Vector backend `{app_config.retrieval.vector_backend}`", "ok" if report.vector_backend_ready else "missing")
     console.print(table)
     if report.notes:
@@ -55,7 +62,7 @@ def ingest(
 ) -> None:
     runtime = build_runtime(config_path=config)
     report = runtime.ingestion.ingest(prune_missing=False)
-    _print_ingestion_report(report)
+    _print_ingestion_report(report, runtime.config.ingest.mode, runtime.config.ingest.bridge_model)
 
 
 @app.command()
@@ -65,7 +72,7 @@ def reindex(
 ) -> None:
     runtime = build_runtime(config_path=config)
     report = runtime.ingestion.ingest(prune_missing=True, force_embeddings=force_embeddings)
-    _print_ingestion_report(report)
+    _print_ingestion_report(report, runtime.config.ingest.mode, runtime.config.ingest.bridge_model)
 
 
 @app.command()
@@ -133,7 +140,11 @@ def serve_web(
     run_web_server(config)
 
 
-def _print_ingestion_report(report) -> None:
+def _print_ingestion_report(report, ingest_mode: str, bridge_model: str) -> None:
+    if ingest_mode == "bridge":
+        console.print(Panel(f"Bridge enrichment enabled via `{bridge_model}`.", title="Ingest mode"))
+    else:
+        console.print(Panel("Local heuristic ingest is active.", title="Ingest mode"))
     table = Table(title="Ingestion report")
     table.add_column("Category")
     table.add_column("Count")

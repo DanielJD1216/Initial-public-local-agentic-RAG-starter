@@ -1,5 +1,6 @@
-from local_agentic_rag.agent import classify_query, has_keyword_grounding, should_retry
+from local_agentic_rag.agent import TransparentRAGAgent, classify_query, has_keyword_grounding, should_retry
 from local_agentic_rag.models import ChunkRecord, RetrievalAttempt
+from tests.conftest import build_test_runtime
 
 
 def test_query_classification_covers_broad_and_multi_hop() -> None:
@@ -37,3 +38,23 @@ def test_keyword_grounding_rejects_irrelevant_citations() -> None:
         location_label="Escalation | lines 1-2",
     )
     assert not has_keyword_grounding("When is the salary adjustment review window planned?", [chunk])
+
+
+class FailingChatClient:
+    def chat_json(self, *, system_prompt: str, user_prompt: str):  # type: ignore[no-untyped-def]
+        raise RuntimeError("model returned invalid json")
+
+
+def test_agent_gracefully_abstains_when_chat_json_fails(tmp_path) -> None:
+    runtime, _config_path, _docs_path = build_test_runtime(tmp_path)
+    runtime.ingestion.ingest(prune_missing=False)
+    agent = TransparentRAGAgent(
+        config=runtime.config,
+        retriever=runtime.retriever,
+        chat_client=FailingChatClient(),
+    )
+
+    result = agent.answer("What is the standard support first response time?", active_principals=["*"])
+    assert not result.grounded
+    assert result.status == "generation_error"
+    assert "could not produce a structured grounded answer" in result.answer

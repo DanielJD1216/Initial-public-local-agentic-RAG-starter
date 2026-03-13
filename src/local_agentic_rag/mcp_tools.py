@@ -1,14 +1,48 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 
 from .agent import classify_query
+from .ingest_bridge import discover_ingest_bridge
 from .service import AppRuntime
 
 
 @dataclass(slots=True)
 class MCPToolset:
     runtime: AppRuntime
+
+    def get_runtime_status(self) -> dict[str, object]:
+        if self.runtime.config.ingest.mode == "bridge":
+            bridge_status = discover_ingest_bridge(
+                self.runtime.config.ingest.bridge_base_url,
+                model=self.runtime.config.ingest.bridge_model,
+                timeout_seconds=self.runtime.config.ingest.request_timeout_seconds,
+            )
+        else:
+            bridge_status = {
+                "base_url": self.runtime.config.ingest.bridge_base_url,
+                "reachable": None,
+                "model": self.runtime.config.ingest.bridge_model,
+                "error": None,
+            }
+        return {
+            "project_name": self.runtime.config.project_name,
+            "documents_path": str(self.runtime.config.paths.documents),
+            "local_models": {
+                "profile": self.runtime.config.models.profile,
+                "base_url": self.runtime.config.models.base_url,
+                "chat_model": self.runtime.config.models.chat_model,
+                "embedding_model": self.runtime.config.models.embedding_model,
+            },
+            "ingest": {
+                "mode": self.runtime.config.ingest.mode,
+                "bridge": bridge_status if isinstance(bridge_status, dict) else bridge_status.to_dict(),
+                "corpus": self.runtime.store.get_corpus_ingest_summary().to_dict(),
+            },
+            "permissions_enabled": self.runtime.config.permissions.enabled,
+            "default_principals": list(self.runtime.config.permissions.active_principals),
+        }
 
     def search_documents(self, query: str, *, top_k: int = 5, principals: list[str] | None = None) -> dict[str, object]:
         principals = principals or list(self.runtime.config.permissions.active_principals)
@@ -61,3 +95,27 @@ class MCPToolset:
         if debug:
             payload["trace"] = result.trace.to_dict()
         return payload
+
+    def ingest_path(
+        self,
+        path: str,
+        *,
+        prune_missing: bool = True,
+        force_embeddings: bool = False,
+    ) -> dict[str, object]:
+        candidate = Path(path).expanduser().resolve()
+        if not candidate.exists():
+            raise ValueError(f"Documents path does not exist: {candidate}")
+        if not candidate.is_dir():
+            raise ValueError(f"Documents path is not a directory: {candidate}")
+        self.runtime.config.paths.documents = candidate
+        report = self.runtime.ingestion.ingest(prune_missing=prune_missing, force_embeddings=force_embeddings)
+        return {
+            "status": self.get_runtime_status(),
+            "report": {
+                "processed": report.processed,
+                "skipped": report.skipped,
+                "deleted": report.deleted,
+                "errors": report.errors,
+            },
+        }

@@ -15,6 +15,10 @@ def test_chunking_respects_section_boundaries() -> None:
         access_principals=["*"],
         file_size_bytes=100,
         modified_at="2026-03-12T00:00:00+00:00",
+        ingest_mode="local",
+        ingest_model="local-heuristic",
+        ingest_fingerprint="fingerprint",
+        chunking_strategy="heuristic",
     )
     section = ParsedSection(
         text="Paragraph one.\n\nParagraph two with more words.\n\nParagraph three wraps this up.",

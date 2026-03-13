@@ -7,6 +7,7 @@ from pathlib import Path
 
 import yaml
 
+from local_agentic_rag.ingest_bridge import EnrichedDocument, EnrichedSection, SemanticChunkPlan
 from local_agentic_rag.service import build_runtime
 
 
@@ -69,6 +70,54 @@ class FakeChatClient:
         return {"answer": answer, "grounded": True, "citations": citations}
 
 
+class FakeBridgeEnrichmentClient:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def enrich_document(
+        self,
+        *,
+        source_path: str,
+        content_type: str,
+        detected_title: str,
+        sections: list[dict[str, object]],
+        stage_flags: dict[str, bool],
+    ) -> EnrichedDocument:
+        del content_type, source_path
+        self.calls += 1
+        normalized_sections = [
+            EnrichedSection(
+                text=str(section["text"]).strip().replace("  ", " "),
+                section_path=f"Bridge/{str(section['section_path']).strip() or 'Section'}",
+                page_number=section.get("page_number"),
+                line_start=section.get("line_start"),
+                line_end=section.get("line_end"),
+            )
+            for section in sections
+        ]
+        semantic_chunks = []
+        if stage_flags.get("semantic_chunking", False):
+            for section in normalized_sections:
+                paragraphs = [part.strip() for part in re.split(r"\n\s*\n", section.text) if part.strip()]
+                for paragraph in paragraphs:
+                    semantic_chunks.append(
+                        SemanticChunkPlan(
+                            text=paragraph,
+                            section_path=section.section_path,
+                            page_number=section.page_number,
+                            line_start=section.line_start,
+                            line_end=section.line_end,
+                            location_label=f"{section.section_path} | semantic",
+                        )
+                    )
+        return EnrichedDocument(
+            title=f"Bridge {detected_title or 'Document'}".strip(),
+            sections=normalized_sections,
+            metadata={"title": f"Bridge {detected_title or 'Document'}".strip()},
+            semantic_chunks=semantic_chunks,
+        )
+
+
 def _extract_question(user_prompt: str) -> str:
     match = re.search(r"Question:\n(.*?)\n\n", user_prompt, re.S)
     return match.group(1).strip() if match else user_prompt.strip()
@@ -107,7 +156,13 @@ def _select_supporting_evidence(question: str, evidence: list[dict[str, str]]) -
     return [{"chunk_id": item["chunk_id"], "sentence": item["sentence"]} for item in selected[:3]]
 
 
-def write_test_config(tmp_path: Path, docs_path: Path, *, permissions_enabled: bool = True) -> Path:
+def write_test_config(
+    tmp_path: Path,
+    docs_path: Path,
+    *,
+    permissions_enabled: bool = True,
+    ingest_mode: str = "local",
+) -> Path:
     config_path = tmp_path / "config.yaml"
     payload = {
         "version": 1,
@@ -119,12 +174,21 @@ def write_test_config(tmp_path: Path, docs_path: Path, *, permissions_enabled: b
             "vector_metadata": str(tmp_path / ".rag_local" / "vector.meta.json"),
             "cache_dir": str(tmp_path / ".rag_local" / "cache"),
         },
-        "models": {
+        "local_models": {
             "profile": "small",
             "chat_model": "fake-chat",
             "embedding_model": "fake-embed",
             "base_url": "http://127.0.0.1:11434",
             "request_timeout_seconds": 30,
+        },
+        "ingest": {
+            "mode": ingest_mode,
+            "bridge_base_url": "http://127.0.0.1:8787",
+            "bridge_model": "fake-bridge",
+            "request_timeout_seconds": 15,
+            "cleanup": True,
+            "semantic_chunking": True,
+            "metadata_enrichment": True,
         },
         "retrieval": {
             "top_k": 4,
@@ -141,6 +205,20 @@ def write_test_config(tmp_path: Path, docs_path: Path, *, permissions_enabled: b
             "default_access_scope": "public",
             "default_access_principals": ["*"],
             "active_principals": ["*"],
+            "auto_restrict_enabled": True,
+            "auto_restrict_principals": ["owners"],
+            "auto_restrict_markers": [
+                "confidential",
+                "private and confidential",
+                "strictly confidential",
+                "internal only",
+                "for internal use only",
+                "do not share",
+                "not for distribution",
+                "restricted",
+                "sensitive",
+                "proprietary",
+            ],
         },
         "ui": {"host": "127.0.0.1", "port": 8501},
         "web": {"host": "127.0.0.1", "port": 3000},
@@ -158,12 +236,19 @@ def copy_sample_corpus(tmp_path: Path) -> Path:
     return destination
 
 
-def build_test_runtime(tmp_path: Path, *, permissions_enabled: bool = True):
+def build_test_runtime(
+    tmp_path: Path,
+    *,
+    permissions_enabled: bool = True,
+    ingest_mode: str = "local",
+    bridge_client: FakeBridgeEnrichmentClient | None = None,
+):
     docs_path = copy_sample_corpus(tmp_path)
-    config_path = write_test_config(tmp_path, docs_path, permissions_enabled=permissions_enabled)
+    config_path = write_test_config(tmp_path, docs_path, permissions_enabled=permissions_enabled, ingest_mode=ingest_mode)
     runtime = build_runtime(
         config_path=config_path,
         embedding_client=FakeEmbeddingClient(),
         chat_client=FakeChatClient(),
+        ingest_enrichment_client=bridge_client,
     )
     return runtime, config_path, docs_path

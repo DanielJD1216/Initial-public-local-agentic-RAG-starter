@@ -37,13 +37,24 @@ class PathSettings:
 
 
 @dataclass(slots=True)
-class ModelSettings:
+class LocalModelSettings:
     profile: str
     chat_model: str
     embedding_model: str
     base_url: str
     request_timeout_seconds: int = 120
     disable_thinking: bool = True
+
+
+@dataclass(slots=True)
+class IngestSettings:
+    mode: str = "local"
+    bridge_base_url: str = "http://127.0.0.1:8787"
+    bridge_model: str = "bridge-default"
+    request_timeout_seconds: int = 60
+    cleanup: bool = True
+    semantic_chunking: bool = True
+    metadata_enrichment: bool = True
 
 
 @dataclass(slots=True)
@@ -64,6 +75,22 @@ class PermissionSettings:
     default_access_scope: str = "public"
     default_access_principals: list[str] = field(default_factory=lambda: ["*"])
     active_principals: list[str] = field(default_factory=lambda: ["*"])
+    auto_restrict_enabled: bool = True
+    auto_restrict_principals: list[str] = field(default_factory=lambda: ["owners"])
+    auto_restrict_markers: list[str] = field(
+        default_factory=lambda: [
+            "confidential",
+            "private and confidential",
+            "strictly confidential",
+            "internal only",
+            "for internal use only",
+            "do not share",
+            "not for distribution",
+            "restricted",
+            "sensitive",
+            "proprietary",
+        ]
+    )
 
 
 @dataclass(slots=True)
@@ -90,7 +117,8 @@ class AppConfig:
     project_name: str
     root_dir: Path
     paths: PathSettings
-    models: ModelSettings
+    local_models: LocalModelSettings
+    ingest: IngestSettings
     retrieval: RetrievalSettings
     permissions: PermissionSettings
     ui: UISettings
@@ -99,6 +127,10 @@ class AppConfig:
 
     def ensure_runtime_directories(self) -> None:
         self.paths.ensure_directories()
+
+    @property
+    def models(self) -> LocalModelSettings:
+        return self.local_models
 
 
 def _parse_bool(raw_value: str) -> bool:
@@ -119,13 +151,29 @@ def _resolve_path(root_dir: Path, value: str) -> Path:
 def _apply_env_overrides(raw_config: dict[str, Any]) -> dict[str, Any]:
     env_map: dict[str, tuple[str, Any]] = {
         "RAG_DOCUMENTS_PATH": ("paths.documents", str),
-        "RAG_CHAT_MODEL": ("models.chat_model", str),
-        "RAG_EMBEDDING_MODEL": ("models.embedding_model", str),
-        "RAG_OLLAMA_BASE_URL": ("models.base_url", str),
-        "RAG_MODEL_PROFILE": ("models.profile", str),
-        "RAG_DISABLE_THINKING": ("models.disable_thinking", _parse_bool),
+        "RAG_LOCAL_CHAT_MODEL": ("local_models.chat_model", str),
+        "RAG_CHAT_MODEL": ("local_models.chat_model", str),
+        "RAG_LOCAL_EMBEDDING_MODEL": ("local_models.embedding_model", str),
+        "RAG_EMBEDDING_MODEL": ("local_models.embedding_model", str),
+        "RAG_LOCAL_OLLAMA_BASE_URL": ("local_models.base_url", str),
+        "RAG_OLLAMA_BASE_URL": ("local_models.base_url", str),
+        "RAG_LOCAL_MODEL_PROFILE": ("local_models.profile", str),
+        "RAG_MODEL_PROFILE": ("local_models.profile", str),
+        "RAG_LOCAL_DISABLE_THINKING": ("local_models.disable_thinking", _parse_bool),
+        "RAG_DISABLE_THINKING": ("local_models.disable_thinking", _parse_bool),
+        "RAG_LOCAL_REQUEST_TIMEOUT_SECONDS": ("local_models.request_timeout_seconds", int),
+        "RAG_INGEST_MODE": ("ingest.mode", str),
+        "RAG_INGEST_BRIDGE_BASE_URL": ("ingest.bridge_base_url", str),
+        "RAG_INGEST_BRIDGE_MODEL": ("ingest.bridge_model", str),
+        "RAG_INGEST_REQUEST_TIMEOUT_SECONDS": ("ingest.request_timeout_seconds", int),
+        "RAG_INGEST_CLEANUP": ("ingest.cleanup", _parse_bool),
+        "RAG_INGEST_SEMANTIC_CHUNKING": ("ingest.semantic_chunking", _parse_bool),
+        "RAG_INGEST_METADATA_ENRICHMENT": ("ingest.metadata_enrichment", _parse_bool),
         "RAG_PERMISSION_ENABLED": ("permissions.enabled", _parse_bool),
         "RAG_ACTIVE_PRINCIPALS": ("permissions.active_principals", _parse_list),
+        "RAG_AUTO_RESTRICT_ENABLED": ("permissions.auto_restrict_enabled", _parse_bool),
+        "RAG_AUTO_RESTRICT_PRINCIPALS": ("permissions.auto_restrict_principals", _parse_list),
+        "RAG_AUTO_RESTRICT_MARKERS": ("permissions.auto_restrict_markers", _parse_list),
         "RAG_VECTOR_BACKEND": ("retrieval.vector_backend", str),
     }
     updated = dict(raw_config)
@@ -142,12 +190,13 @@ def _apply_env_overrides(raw_config: dict[str, Any]) -> dict[str, Any]:
 
 def _deep_merge_profile_defaults(raw_config: dict[str, Any]) -> dict[str, Any]:
     updated = dict(raw_config)
-    models = dict(updated.get("models", {}))
-    profile = models.get("profile", "balanced")
+    local_models = dict(updated.get("local_models") or updated.get("models", {}))
+    profile = local_models.get("profile", "balanced")
     defaults = MODEL_PROFILES.get(profile, MODEL_PROFILES["balanced"])
-    models.setdefault("chat_model", defaults["chat_model"])
-    models.setdefault("embedding_model", defaults["embedding_model"])
-    updated["models"] = models
+    local_models.setdefault("chat_model", defaults["chat_model"])
+    local_models.setdefault("embedding_model", defaults["embedding_model"])
+    updated["local_models"] = local_models
+    updated.setdefault("ingest", {})
     return updated
 
 
@@ -160,7 +209,8 @@ def load_config(config_path: str | Path | None = None) -> AppConfig:
     raw_config = _apply_env_overrides(raw_config)
 
     paths = raw_config["paths"]
-    models = raw_config["models"]
+    local_models = raw_config.get("local_models") or raw_config.get("models", {})
+    ingest = raw_config.get("ingest", {})
     retrieval = raw_config.get("retrieval", {})
     permissions = raw_config.get("permissions", {})
     ui = raw_config.get("ui", {})
@@ -178,13 +228,22 @@ def load_config(config_path: str | Path | None = None) -> AppConfig:
             vector_metadata=_resolve_path(root_dir, str(paths["vector_metadata"])),
             cache_dir=_resolve_path(root_dir, str(paths["cache_dir"])),
         ),
-        models=ModelSettings(
-            profile=str(models.get("profile", "balanced")),
-            chat_model=str(models["chat_model"]),
-            embedding_model=str(models["embedding_model"]),
-            base_url=str(models.get("base_url", "http://127.0.0.1:11434")),
-            request_timeout_seconds=int(models.get("request_timeout_seconds", 120)),
-            disable_thinking=bool(models.get("disable_thinking", True)),
+        local_models=LocalModelSettings(
+            profile=str(local_models.get("profile", "balanced")),
+            chat_model=str(local_models["chat_model"]),
+            embedding_model=str(local_models["embedding_model"]),
+            base_url=str(local_models.get("base_url", "http://127.0.0.1:11434")),
+            request_timeout_seconds=int(local_models.get("request_timeout_seconds", 120)),
+            disable_thinking=bool(local_models.get("disable_thinking", True)),
+        ),
+        ingest=IngestSettings(
+            mode=str(ingest.get("mode", "local")),
+            bridge_base_url=str(ingest.get("bridge_base_url", "http://127.0.0.1:8787")),
+            bridge_model=str(ingest.get("bridge_model", "bridge-default")),
+            request_timeout_seconds=int(ingest.get("request_timeout_seconds", 60)),
+            cleanup=bool(ingest.get("cleanup", True)),
+            semantic_chunking=bool(ingest.get("semantic_chunking", True)),
+            metadata_enrichment=bool(ingest.get("metadata_enrichment", True)),
         ),
         retrieval=RetrievalSettings(
             top_k=int(retrieval.get("top_k", 6)),
@@ -201,6 +260,25 @@ def load_config(config_path: str | Path | None = None) -> AppConfig:
             default_access_scope=str(permissions.get("default_access_scope", "public")),
             default_access_principals=list(permissions.get("default_access_principals", ["*"])),
             active_principals=list(permissions.get("active_principals", ["*"])),
+            auto_restrict_enabled=bool(permissions.get("auto_restrict_enabled", True)),
+            auto_restrict_principals=list(permissions.get("auto_restrict_principals", ["owners"])),
+            auto_restrict_markers=list(
+                permissions.get(
+                    "auto_restrict_markers",
+                    [
+                        "confidential",
+                        "private and confidential",
+                        "strictly confidential",
+                        "internal only",
+                        "for internal use only",
+                        "do not share",
+                        "not for distribution",
+                        "restricted",
+                        "sensitive",
+                        "proprietary",
+                    ],
+                )
+            ),
         ),
         ui=UISettings(
             host=str(ui.get("host", "127.0.0.1")),

@@ -16,6 +16,10 @@ def test_document_metadata_requires_access_principals() -> None:
         access_principals=[],
         file_size_bytes=100,
         modified_at="2026-03-12T00:00:00+00:00",
+        ingest_mode="local",
+        ingest_model="local-heuristic",
+        ingest_fingerprint="fingerprint",
+        chunking_strategy="heuristic",
     )
     with pytest.raises(ValueError):
         metadata.validate()

@@ -182,7 +182,7 @@ The web UI is a shadcn-style React shell with:
 
 - a Codex-like three-pane layout
 - live runtime and corpus metrics
-- document-path switching and indexing from the browser
+- browser folder picking plus direct path indexing from the browser
 - permission-aware principal controls
 - answer, citations, chunks, and trace inspection in separate panels
 
@@ -198,7 +198,8 @@ Suggested demo flow:
 1. Start on `sample_corpus`.
 2. Run `Permission check` with the default principals to show the abstain path.
 3. Switch to `Custom`, enable `owners`, and ask again to show the restricted citation.
-4. Paste a real folder path into `Documents folder`, click `Index folder`, and rerun a simple question.
+4. Click `Choose folder` to pick a local directory from the browser, or paste a real path and use `Index pasted path`.
+5. Rerun a simple question and confirm the citation switched to the new corpus.
 
 ## MCP tools
 

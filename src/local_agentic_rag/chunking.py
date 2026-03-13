@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from typing import Iterable
 
+from .ingest_bridge import SemanticChunkPlan
 from .models import ChunkRecord, DocumentMetadata, ParsedSection
 from .utils import estimate_tokens
 
@@ -13,7 +14,16 @@ def build_chunks(
     *,
     max_chunk_tokens: int,
     overlap_tokens: int,
+    semantic_chunks: list[SemanticChunkPlan] | None = None,
 ) -> list[ChunkRecord]:
+    if semantic_chunks:
+        return _build_semantic_chunks(
+            metadata,
+            semantic_chunks,
+            max_chunk_tokens=max_chunk_tokens,
+            overlap_tokens=overlap_tokens,
+        )
+
     chunks: list[ChunkRecord] = []
     for section in sections:
         segment_texts = _split_section(section.text, max_chunk_tokens=max_chunk_tokens, overlap_tokens=overlap_tokens)
@@ -38,6 +48,50 @@ def build_chunks(
                 page_number=section.page_number,
                 line_start=section.line_start,
                 line_end=section.line_end,
+                token_count=estimate_tokens(segment),
+            )
+            chunk.validate()
+            chunks.append(chunk)
+    return chunks
+
+
+def _build_semantic_chunks(
+    metadata: DocumentMetadata,
+    semantic_chunks: list[SemanticChunkPlan],
+    *,
+    max_chunk_tokens: int,
+    overlap_tokens: int,
+) -> list[ChunkRecord]:
+    chunks: list[ChunkRecord] = []
+    for plan in semantic_chunks:
+        segments = _split_section(plan.text, max_chunk_tokens=max_chunk_tokens, overlap_tokens=overlap_tokens)
+        if not segments:
+            continue
+        for part_index, segment in enumerate(segments, start=1):
+            chunk_index = len(chunks)
+            location_label = plan.location_label.strip() or _build_semantic_location_label(
+                plan,
+                part_index=part_index,
+                total_parts=len(segments),
+            )
+            chunk = ChunkRecord(
+                chunk_id=f"{metadata.doc_id}-chunk-{chunk_index:04d}",
+                doc_id=metadata.doc_id,
+                source_path=metadata.source_path,
+                content_type=metadata.content_type,
+                checksum=metadata.checksum,
+                parser_version=metadata.parser_version,
+                title=metadata.title,
+                ingested_at=metadata.ingested_at,
+                access_scope=metadata.access_scope,
+                access_principals=list(metadata.access_principals),
+                chunk_index=chunk_index,
+                section_path=plan.section_path,
+                text=segment,
+                location_label=location_label,
+                page_number=plan.page_number,
+                line_start=plan.line_start,
+                line_end=plan.line_end,
                 token_count=estimate_tokens(segment),
             )
             chunk.validate()
@@ -112,6 +166,19 @@ def _build_location_label(section: ParsedSection, part_index: int, total_parts: 
         parts.append(section.section_path)
     if section.line_start is not None and section.line_end is not None:
         parts.append(f"lines {section.line_start}-{section.line_end}")
+    if total_parts > 1:
+        parts.append(f"part {part_index}/{total_parts}")
+    return " | ".join(parts)
+
+
+def _build_semantic_location_label(plan: SemanticChunkPlan, *, part_index: int, total_parts: int) -> str:
+    parts: list[str] = []
+    if plan.page_number is not None:
+        parts.append(f"Page {plan.page_number}")
+    if plan.section_path:
+        parts.append(plan.section_path)
+    if plan.line_start is not None and plan.line_end is not None:
+        parts.append(f"lines {plan.line_start}-{plan.line_end}")
     if total_parts > 1:
         parts.append(f"part {part_index}/{total_parts}")
     return " | ".join(parts)

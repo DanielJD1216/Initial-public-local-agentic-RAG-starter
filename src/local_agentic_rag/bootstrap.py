@@ -6,6 +6,7 @@ import sys
 from dataclasses import dataclass
 
 from .config import AppConfig
+from .ingest_bridge import discover_ingest_bridge
 
 
 @dataclass(slots=True)
@@ -15,6 +16,9 @@ class BootstrapReport:
     chat_model_available: bool
     embedding_model_available: bool
     vector_backend_ready: bool
+    ingest_mode: str
+    bridge_reachable: bool | None
+    bridge_error: str | None
     notes: list[str]
 
 
@@ -68,6 +72,25 @@ def run_bootstrap_checks(config: AppConfig, *, pull_missing: bool = False) -> Bo
         if not vector_backend_ready:
             notes.append("FAISS backend selected but faiss-cpu is not installed in this environment.")
 
+    bridge_reachable: bool | None = None
+    bridge_error: str | None = None
+    if config.ingest.mode == "bridge":
+        bridge_status = discover_ingest_bridge(
+            config.ingest.bridge_base_url,
+            model=config.ingest.bridge_model,
+            timeout_seconds=config.ingest.request_timeout_seconds,
+        )
+        bridge_reachable = bridge_status.reachable
+        bridge_error = bridge_status.error
+        notes.append(
+            "Configured ingest bridge: "
+            f"mode=bridge model={config.ingest.bridge_model} base_url={bridge_status.base_url}"
+        )
+        if bridge_status.error:
+            notes.append(bridge_status.error)
+    else:
+        notes.append("Configured ingest mode: local heuristic chunking and metadata.")
+
     notes.append(
         "Configured model profile: "
         f"profile={config.models.profile} "
@@ -81,6 +104,9 @@ def run_bootstrap_checks(config: AppConfig, *, pull_missing: bool = False) -> Bo
         chat_model_available=chat_model_available,
         embedding_model_available=embedding_model_available,
         vector_backend_ready=vector_backend_ready,
+        ingest_mode=config.ingest.mode,
+        bridge_reachable=bridge_reachable,
+        bridge_error=bridge_error,
         notes=notes,
     )
 

@@ -42,7 +42,7 @@ export default {
         sm: "calc(var(--radius) - 4px)",
       },
       boxShadow: {
-        shell: "0 20px 60px rgba(3, 7, 18, 0.45)",
+        shell: "0 22px 56px rgba(15, 23, 42, 0.08)",
       },
     },
   },

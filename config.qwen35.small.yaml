@@ -8,13 +8,22 @@ paths:
   vector_metadata: "./.rag_local/vector.meta.json"
   cache_dir: "./.rag_local/cache"
 
-models:
+local_models:
   profile: "small"
   chat_model: "qwen3.5:4b"
   embedding_model: "nomic-embed-text"
   base_url: "http://127.0.0.1:11434"
   request_timeout_seconds: 300
   disable_thinking: true
+
+ingest:
+  mode: "local"
+  bridge_base_url: "http://127.0.0.1:8787"
+  bridge_model: "bridge-default"
+  request_timeout_seconds: 60
+  cleanup: true
+  semantic_chunking: true
+  metadata_enrichment: true
 
 retrieval:
   top_k: 6

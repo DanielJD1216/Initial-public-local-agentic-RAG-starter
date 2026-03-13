@@ -69,7 +69,22 @@ class TransparentRAGAgent:
                 status="abstained",
             )
 
-        response = self._grounded_answer(question, best_attempt)
+        try:
+            response = self._grounded_answer(question, best_attempt)
+        except RuntimeError as exc:
+            trace.verification_notes.append(f"Structured generation failed: {exc}")
+            return AnswerResult(
+                question=question,
+                answer=(
+                    "I found related material, but the active local chat model could not produce a structured grounded answer. "
+                    "Try a different chat model or inspect the runtime settings."
+                ),
+                grounded=False,
+                citations=[],
+                trace=trace,
+                retrieved_chunks=[hit.chunk for hit in best_attempt.fused_hits],
+                status="generation_error",
+            )
         available_chunks = {hit.chunk.chunk_id: hit.chunk for hit in best_attempt.fused_hits}
         citation_ids = [item["chunk_id"] for item in response.get("citations", []) if item.get("chunk_id") in available_chunks]
         citation_reasons = {
@@ -109,20 +124,23 @@ class TransparentRAGAgent:
 
     def _rewrite_query(self, question: str, attempt: RetrievalAttempt) -> str:
         context_lines = [f"- {hit.chunk.title}: {hit.chunk.section_path}" for hit in attempt.fused_hits[:5]]
-        payload = self.chat_client.chat_json(
-            system_prompt=(
-                "You rewrite weak retrieval queries for document search. "
-                "Return JSON with keys rewritten_query and reason."
-            ),
-            user_prompt=(
-                "Question:\n"
-                f"{question}\n\n"
-                "Retrieved context titles:\n"
-                f"{chr(10).join(context_lines) if context_lines else '- none'}\n\n"
-                "Rewrite the question into one sharper search query. "
-                "Keep proper nouns and dates. If no rewrite helps, repeat the original."
-            ),
-        )
+        try:
+            payload = self.chat_client.chat_json(
+                system_prompt=(
+                    "You rewrite weak retrieval queries for document search. "
+                    "Return JSON with keys rewritten_query and reason."
+                ),
+                user_prompt=(
+                    "Question:\n"
+                    f"{question}\n\n"
+                    "Retrieved context titles:\n"
+                    f"{chr(10).join(context_lines) if context_lines else '- none'}\n\n"
+                    "Rewrite the question into one sharper search query. "
+                    "Keep proper nouns and dates. If no rewrite helps, repeat the original."
+                ),
+            )
+        except RuntimeError:
+            return question
         rewritten = str(payload.get("rewritten_query", "")).strip()
         return rewritten or question
 
