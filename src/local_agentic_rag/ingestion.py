@@ -16,6 +16,7 @@ from .config import AppConfig
 from .metadata import load_sidecar_metadata, normalize_access_principals
 from .models import DocumentMetadata, ParsedSection, utc_now_iso
 from .parsers import parse_document
+from .planning_artifacts import build_planning_artifacts
 from .retrieval import HybridRetriever
 from .sensitivity import should_auto_restrict_document
 from .storage import SQLiteStore
@@ -98,6 +99,11 @@ class IngestionService:
                 )
                 if not chunks:
                     raise ValueError("No text content could be extracted from the document.")
+                planning_artifact, entities = build_planning_artifacts(
+                    metadata=metadata,
+                    sections=effective_sections,
+                    chunks=chunks,
+                )
                 vectors = self.embedding_client.embed_texts([chunk.text for chunk in chunks])
                 embedding_map = {chunk.chunk_id: vector for chunk, vector in zip(chunks, vectors, strict=True)}
                 self.store.replace_chunks(
@@ -105,6 +111,8 @@ class IngestionService:
                     chunks,
                     embedding_map,
                     embedding_model=self.config.models.embedding_model,
+                    planning_artifact=planning_artifact,
+                    entities=entities,
                 )
                 report.processed.append(source_path)
             except Exception as exc:  # pragma: no cover - integration tests cover happy path

@@ -104,6 +104,20 @@ class CorpusIngestSummary:
 
 
 @dataclass(slots=True)
+class PlanningArtifactStatus:
+    document_count: int
+    ready_document_count: int
+    missing_document_count: int
+    outdated_document_count: int
+    artifact_version: str
+    available: bool
+    reindex_required_for_middleweight: bool
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(slots=True)
 class ChunkRecord:
     chunk_id: str
     doc_id: str
@@ -163,6 +177,46 @@ class EmbeddingRecord:
 
 
 @dataclass(slots=True)
+class DocumentPlanningArtifact:
+    doc_id: str
+    artifact_version: str
+    planning_fingerprint: str
+    normalized_title: str
+    short_summary: str
+    section_outline: list[str]
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(slots=True)
+class DocumentEntity:
+    doc_id: str
+    entity_type: str
+    entity_value: str
+    normalized_value: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(slots=True)
+class DocumentSearchHit:
+    doc_id: str
+    title: str
+    source_path: str
+    access_scope: str
+    access_principals: list[str]
+    score: float
+    short_summary: str = ""
+    section_outline: list[str] = field(default_factory=list)
+    entity_matches: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(slots=True)
 class RetrievalHit:
     chunk: ChunkRecord
     score: float
@@ -208,12 +262,74 @@ class AnswerCitation:
 
 
 @dataclass(slots=True)
+class PlanStep:
+    step_id: str
+    title: str
+    status: str
+    subquestion: str = ""
+    selected_tool: str = ""
+    notes: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(slots=True)
+class ToolEvent:
+    tool_name: str
+    status: str
+    query: str = ""
+    summary: str = ""
+    result_count: int = 0
+    doc_ids: list[str] = field(default_factory=list)
+    chunk_ids: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(slots=True)
+class VerifierSummary:
+    status: str
+    citation_coverage_ok: bool
+    contradiction_detected: bool
+    completion_ok: bool
+    notes: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(slots=True)
+class AgentRuntimeStatus:
+    configured_mode: str
+    active_mode: str
+    planning_artifacts_available: bool
+    reindex_required_for_middleweight: bool
+    downgrade_reason: str | None = None
+    artifact_version: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(slots=True)
 class AgentTrace:
     initial_query: str
     query_type: str
     rewritten_query: str | None
     attempts: list[RetrievalAttempt] = field(default_factory=list)
     verification_notes: list[str] = field(default_factory=list)
+    configured_mode: str = "lightweight"
+    active_mode: str = "lightweight"
+    downgrade_reason: str | None = None
+    task_mode: str = "simple_lookup"
+    plan_steps: list[PlanStep] = field(default_factory=list)
+    tool_events: list[ToolEvent] = field(default_factory=list)
+    stop_reason: str | None = None
+    clarification_prompt: str | None = None
+    verifier_summary: VerifierSummary | None = None
+    reindex_required_for_middleweight: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -222,6 +338,16 @@ class AgentTrace:
             "rewritten_query": self.rewritten_query,
             "attempts": [attempt.to_dict() for attempt in self.attempts],
             "verification_notes": self.verification_notes,
+            "configured_mode": self.configured_mode,
+            "active_mode": self.active_mode,
+            "downgrade_reason": self.downgrade_reason,
+            "task_mode": self.task_mode,
+            "plan_steps": [step.to_dict() for step in self.plan_steps],
+            "tool_events": [event.to_dict() for event in self.tool_events],
+            "stop_reason": self.stop_reason,
+            "clarification_prompt": self.clarification_prompt,
+            "verifier_summary": self.verifier_summary.to_dict() if self.verifier_summary else None,
+            "reindex_required_for_middleweight": self.reindex_required_for_middleweight,
         }
 
 
@@ -235,6 +361,17 @@ class AnswerResult:
     retrieved_chunks: list[ChunkRecord]
     status: str = "ok"
     blocked_principals: list[str] = field(default_factory=list)
+    task_mode: str = "simple_lookup"
+    failure_reason: str | None = None
+    clarification_prompt: str | None = None
+    plan_summary: list[PlanStep] = field(default_factory=list)
+    tool_events: list[ToolEvent] = field(default_factory=list)
+    stop_reason: str | None = None
+    verifier_summary: VerifierSummary | None = None
+    configured_mode: str = "lightweight"
+    active_mode: str = "lightweight"
+    downgrade_reason: str | None = None
+    reindex_required_for_middleweight: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -246,4 +383,15 @@ class AnswerResult:
             "retrieved_chunks": [chunk.to_dict() for chunk in self.retrieved_chunks],
             "status": self.status,
             "blocked_principals": self.blocked_principals,
+            "task_mode": self.task_mode,
+            "failure_reason": self.failure_reason,
+            "clarification_prompt": self.clarification_prompt,
+            "plan_summary": [step.to_dict() for step in self.plan_summary],
+            "tool_events": [event.to_dict() for event in self.tool_events],
+            "stop_reason": self.stop_reason,
+            "verifier_summary": self.verifier_summary.to_dict() if self.verifier_summary else None,
+            "configured_mode": self.configured_mode,
+            "active_mode": self.active_mode,
+            "downgrade_reason": self.downgrade_reason,
+            "reindex_required_for_middleweight": self.reindex_required_for_middleweight,
         }

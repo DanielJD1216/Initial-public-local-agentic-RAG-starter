@@ -17,3 +17,4 @@ config.local.*.yaml
 web/node_modules/
 web/.vite/
 web/dist/
+tmp/

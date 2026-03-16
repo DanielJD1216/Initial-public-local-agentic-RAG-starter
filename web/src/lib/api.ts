@@ -49,6 +49,42 @@ export type CorpusIngestSummary = {
   chunking_strategy: string | null;
 };
 
+export type AgentStatusResponse = {
+  configured_mode: "lightweight" | "middleweight";
+  active_mode: "lightweight" | "middleweight";
+  planning_artifacts_available: boolean;
+  reindex_required_for_middleweight: boolean;
+  downgrade_reason: string | null;
+  artifact_version: string | null;
+};
+
+export type PlanStep = {
+  step_id: string;
+  title: string;
+  status: string;
+  subquestion: string;
+  selected_tool: string;
+  notes: string[];
+};
+
+export type ToolEvent = {
+  tool_name: string;
+  status: string;
+  query: string;
+  summary: string;
+  result_count: number;
+  doc_ids: string[];
+  chunk_ids: string[];
+};
+
+export type VerifierSummary = {
+  status: string;
+  citation_coverage_ok: boolean;
+  contradiction_detected: boolean;
+  completion_ok: boolean;
+  notes: string[];
+};
+
 export type StatusResponse = {
   project_name: string;
   config_path: string;
@@ -66,6 +102,7 @@ export type StatusResponse = {
     bridge: BridgeHealthResponse;
     corpus: CorpusIngestSummary;
   };
+  agent: AgentStatusResponse;
   permissions_enabled: boolean;
   default_principals: string[];
   corpus: CorpusSummary;
@@ -107,6 +144,17 @@ export type AskResponse = {
   retrieved_chunks: RetrievedChunk[];
   status: string;
   blocked_principals: string[];
+  task_mode: string;
+  failure_reason: string | null;
+  clarification_prompt: string | null;
+  plan_summary: PlanStep[];
+  tool_events: ToolEvent[];
+  stop_reason: string | null;
+  verifier_summary: VerifierSummary | null;
+  configured_mode: string;
+  active_mode: string;
+  downgrade_reason: string | null;
+  reindex_required_for_middleweight: boolean;
 };
 
 export type ApplyModelSettingsResponse = {

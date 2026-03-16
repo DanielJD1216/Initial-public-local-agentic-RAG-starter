@@ -33,6 +33,34 @@ def normalize_ollama_base_url(raw_base_url: str | None) -> str:
     return value.rstrip("/")
 
 
+def resolve_ollama_model_name(requested_model: str, available_models: list[str]) -> str:
+    normalized_requested = requested_model.strip()
+    if not normalized_requested:
+        return normalized_requested
+    if normalized_requested in available_models:
+        return normalized_requested
+    if normalized_requested.endswith(":latest"):
+        base_name = normalized_requested[: -len(":latest")]
+        if base_name in available_models:
+            return base_name
+        return normalized_requested
+    latest_name = f"{normalized_requested}:latest"
+    if latest_name in available_models:
+        return latest_name
+    return normalized_requested
+
+
+def ollama_models_equivalent(left: str, right: str) -> bool:
+    left_value = left.strip()
+    right_value = right.strip()
+    if left_value == right_value:
+        return True
+    return resolve_ollama_model_name(left_value, [right_value]) == right_value or resolve_ollama_model_name(
+        right_value,
+        [left_value],
+    ) == left_value
+
+
 def discover_ollama_models(base_url: str | None, *, timeout_seconds: int = 5) -> OllamaDiscoveryResult:
     normalized_base_url = normalize_ollama_base_url(base_url)
     try:

@@ -45,6 +45,17 @@ class FailingChatClient:
         raise RuntimeError("model returned invalid json")
 
 
+class EchoingAnswerChatClient:
+    def chat_json(self, *, system_prompt: str, user_prompt: str):  # type: ignore[no-untyped-def]
+        if "rewrite weak retrieval queries" in system_prompt:
+            return {"rewritten_query": _extract_question(user_prompt), "reason": "no rewrite"}
+        return {
+            "task_mode": "simple_lookup",
+            "question": _extract_question(user_prompt),
+            "evidence": _extract_evidence(user_prompt),
+        }
+
+
 def test_agent_gracefully_abstains_when_chat_json_fails(tmp_path) -> None:
     runtime, _config_path, _docs_path = build_test_runtime(tmp_path)
     runtime.ingestion.ingest(prune_missing=False)
@@ -56,5 +67,53 @@ def test_agent_gracefully_abstains_when_chat_json_fails(tmp_path) -> None:
 
     result = agent.answer("What is the standard support first response time?", active_principals=["*"])
     assert not result.grounded
-    assert result.status == "generation_error"
+    assert result.status == "generation_failure"
+    assert result.failure_reason == "generation_failure"
     assert "could not produce a structured grounded answer" in result.answer
+
+
+def test_agent_uses_extractive_fallback_when_model_returns_wrong_schema(tmp_path) -> None:
+    runtime, _config_path, _docs_path = build_test_runtime(tmp_path, permissions_enabled=True)
+    runtime.ingestion.ingest(prune_missing=False)
+    agent = TransparentRAGAgent(
+        config=runtime.config,
+        retriever=runtime.retriever,
+        chat_client=EchoingAnswerChatClient(),
+    )
+
+    result = agent.answer("When is the salary adjustment review window planned?", active_principals=["owners"])
+
+    assert result.grounded
+    assert result.status == "grounded"
+    assert "third week of June" in result.answer
+    assert result.citations
+    assert result.citations[0].chunk_id == "doc-restricted-internal-roadmap-md-chunk-0000"
+
+
+def test_agent_requests_clarification_for_structural_ambiguity(tmp_path) -> None:
+    runtime, _config_path, _docs_path = build_test_runtime(tmp_path)
+    runtime.ingestion.ingest(prune_missing=False)
+
+    result = runtime.agent.answer("what's the 3rd step to take?", active_principals=["*"])
+
+    assert not result.grounded
+    assert result.status == "clarification_required"
+    assert result.failure_reason == "clarification_required"
+    assert result.clarification_prompt is not None
+
+
+def _extract_question(user_prompt: str) -> str:
+    marker = "Question:\n"
+    if marker not in user_prompt:
+        return user_prompt.strip()
+    return user_prompt.split(marker, 1)[1].split("\n\n", 1)[0].strip()
+
+
+def _extract_evidence(user_prompt: str):  # type: ignore[no-untyped-def]
+    marker = "Evidence:\n"
+    if marker not in user_prompt:
+        return []
+    raw_payload = user_prompt.split(marker, 1)[1].split("\n\nAnswer", 1)[0]
+    import json
+
+    return json.loads(raw_payload)

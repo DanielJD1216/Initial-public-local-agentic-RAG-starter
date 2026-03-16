@@ -7,7 +7,18 @@ from pathlib import Path
 
 import numpy as np
 
-from .models import ChunkRecord, CorpusIngestSummary, CorpusSummary, DocumentMetadata, RetrievalHit
+from .models import (
+    ChunkRecord,
+    CorpusIngestSummary,
+    CorpusSummary,
+    DocumentEntity,
+    DocumentMetadata,
+    DocumentPlanningArtifact,
+    DocumentSearchHit,
+    PlanningArtifactStatus,
+    RetrievalHit,
+)
+from .planning_artifacts import PLANNING_ARTIFACT_VERSION, compute_planning_fingerprint
 
 FTS_STOPWORDS = {
     "a",
@@ -90,6 +101,27 @@ class SQLiteStore:
                     vector_dim INTEGER NOT NULL,
                     vector_blob BLOB NOT NULL
                 );
+
+                CREATE TABLE IF NOT EXISTS document_artifacts (
+                    doc_id TEXT PRIMARY KEY REFERENCES documents(doc_id) ON DELETE CASCADE,
+                    artifact_version TEXT NOT NULL,
+                    planning_fingerprint TEXT NOT NULL,
+                    normalized_title TEXT NOT NULL,
+                    short_summary TEXT NOT NULL,
+                    section_outline TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS document_entities (
+                    rowid INTEGER PRIMARY KEY AUTOINCREMENT,
+                    doc_id TEXT NOT NULL REFERENCES documents(doc_id) ON DELETE CASCADE,
+                    entity_type TEXT NOT NULL,
+                    entity_value TEXT NOT NULL,
+                    normalized_value TEXT NOT NULL,
+                    UNIQUE(doc_id, entity_type, normalized_value)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_document_entities_normalized
+                    ON document_entities(normalized_value, entity_type);
 
                 CREATE VIRTUAL TABLE IF NOT EXISTS chunk_fts USING fts5(
                     text,
@@ -195,6 +227,8 @@ class SQLiteStore:
         embeddings: dict[str, list[float]],
         *,
         embedding_model: str,
+        planning_artifact: DocumentPlanningArtifact | None = None,
+        entities: list[DocumentEntity] | None = None,
     ) -> None:
         document.validate()
         with self._connect() as connection:
@@ -296,6 +330,44 @@ class SQLiteStore:
                     """,
                     (chunk.chunk_id, embedding_model, int(vector.shape[0]), vector.tobytes()),
                 )
+            if planning_artifact is not None:
+                connection.execute(
+                    """
+                    INSERT INTO document_artifacts (
+                        doc_id,
+                        artifact_version,
+                        planning_fingerprint,
+                        normalized_title,
+                        short_summary,
+                        section_outline
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        planning_artifact.doc_id,
+                        planning_artifact.artifact_version,
+                        planning_artifact.planning_fingerprint,
+                        planning_artifact.normalized_title,
+                        planning_artifact.short_summary,
+                        json.dumps(planning_artifact.section_outline),
+                    ),
+                )
+            for entity in entities or []:
+                connection.execute(
+                    """
+                    INSERT INTO document_entities (
+                        doc_id,
+                        entity_type,
+                        entity_value,
+                        normalized_value
+                    ) VALUES (?, ?, ?, ?)
+                    """,
+                    (
+                        entity.doc_id,
+                        entity.entity_type,
+                        entity.entity_value,
+                        entity.normalized_value,
+                    ),
+                )
             connection.commit()
 
     def delete_document_by_source_path(self, source_path: str) -> None:
@@ -310,23 +382,179 @@ class SQLiteStore:
             ).fetchone()
         if row is None:
             return None
-        return DocumentMetadata(
+        return self._row_to_document(row)
+
+    def get_document_planning_artifact(self, doc_id: str) -> DocumentPlanningArtifact | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM document_artifacts WHERE doc_id = ?",
+                (doc_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return DocumentPlanningArtifact(
             doc_id=row["doc_id"],
-            source_path=row["source_path"],
-            content_type=row["content_type"],
-            checksum=row["checksum"],
-            parser_version=row["parser_version"],
-            title=row["title"],
-            ingested_at=row["ingested_at"],
-            access_scope=row["access_scope"],
-            access_principals=json.loads(row["access_principals"]),
-            file_size_bytes=row["file_size_bytes"],
-            modified_at=row["modified_at"],
-            ingest_mode=row["ingest_mode"],
-            ingest_model=row["ingest_model"],
-            ingest_fingerprint=row["ingest_fingerprint"],
-            chunking_strategy=row["chunking_strategy"],
+            artifact_version=row["artifact_version"],
+            planning_fingerprint=row["planning_fingerprint"],
+            normalized_title=row["normalized_title"],
+            short_summary=row["short_summary"],
+            section_outline=json.loads(row["section_outline"]),
         )
+
+    def get_planning_artifact_status(self, *, artifact_version: str = PLANNING_ARTIFACT_VERSION) -> PlanningArtifactStatus:
+        with self._connect() as connection:
+            document_rows = connection.execute(
+                """
+                SELECT documents.doc_id, documents.ingest_fingerprint, document_artifacts.artifact_version, document_artifacts.planning_fingerprint
+                FROM documents
+                LEFT JOIN document_artifacts ON document_artifacts.doc_id = documents.doc_id
+                """
+            ).fetchall()
+        if not document_rows:
+            return PlanningArtifactStatus(
+                document_count=0,
+                ready_document_count=0,
+                missing_document_count=0,
+                outdated_document_count=0,
+                artifact_version=artifact_version,
+                available=True,
+                reindex_required_for_middleweight=False,
+            )
+        ready = 0
+        missing = 0
+        outdated = 0
+        for row in document_rows:
+            expected_fingerprint = compute_planning_fingerprint(
+                ingest_fingerprint=row["ingest_fingerprint"],
+                artifact_version=artifact_version,
+            )
+            actual_version = row["artifact_version"]
+            actual_fingerprint = row["planning_fingerprint"]
+            if actual_version is None or actual_fingerprint is None:
+                missing += 1
+            elif actual_version != artifact_version or actual_fingerprint != expected_fingerprint:
+                outdated += 1
+            else:
+                ready += 1
+        return PlanningArtifactStatus(
+            document_count=len(document_rows),
+            ready_document_count=ready,
+            missing_document_count=missing,
+            outdated_document_count=outdated,
+            artifact_version=artifact_version,
+            available=ready == len(document_rows),
+            reindex_required_for_middleweight=(missing + outdated) > 0,
+        )
+
+    def search_document_titles(
+        self,
+        query: str,
+        *,
+        permissions_enabled: bool,
+        active_principals: list[str],
+        limit: int,
+    ) -> list[DocumentSearchHit]:
+        catalog = self._document_search_catalog(
+            permissions_enabled=permissions_enabled,
+            active_principals=active_principals,
+        )
+        tokens = _significant_tokens(query)
+        scored: list[DocumentSearchHit] = []
+        for item in catalog:
+            haystack = " ".join([item["title"], item["source_path"], item["normalized_title"]]).lower()
+            score = sum(2.0 for token in tokens if token in item["normalized_title"])
+            score += sum(1.0 for token in tokens if token in haystack)
+            if score <= 0:
+                continue
+            scored.append(self._catalog_item_to_hit(item, score))
+        scored.sort(key=lambda item: (-item.score, item.title.lower()))
+        return scored[:limit]
+
+    def search_document_metadata(
+        self,
+        query: str,
+        *,
+        permissions_enabled: bool,
+        active_principals: list[str],
+        limit: int,
+    ) -> list[DocumentSearchHit]:
+        catalog = self._document_search_catalog(
+            permissions_enabled=permissions_enabled,
+            active_principals=active_principals,
+        )
+        tokens = _significant_tokens(query)
+        scored: list[DocumentSearchHit] = []
+        for item in catalog:
+            entity_matches = [entity for entity in item["entities"] if any(token in entity.lower() for token in tokens)]
+            outline_matches = [outline for outline in item["section_outline"] if any(token in outline.lower() for token in tokens)]
+            summary = item["short_summary"].lower()
+            score = sum(1.6 for token in tokens if token in summary)
+            score += sum(2.2 for _entity in entity_matches)
+            score += sum(1.2 for _outline in outline_matches)
+            if score <= 0:
+                continue
+            scored.append(self._catalog_item_to_hit(item, score, entity_matches=entity_matches))
+        scored.sort(key=lambda item: (-item.score, item.title.lower()))
+        return scored[:limit]
+
+    def get_section_context(
+        self,
+        doc_id: str,
+        *,
+        section_path: str,
+        permissions_enabled: bool,
+        active_principals: list[str],
+        limit: int,
+    ) -> list[ChunkRecord]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT *
+                FROM chunks
+                WHERE doc_id = ?
+                  AND LOWER(section_path) LIKE ?
+                ORDER BY chunk_index
+                LIMIT ?
+                """,
+                (doc_id, f"%{section_path.lower()}%", limit),
+            ).fetchall()
+        chunks = [self._row_to_chunk(row) for row in rows]
+        if not permissions_enabled:
+            return chunks
+        return [
+            chunk
+            for chunk in chunks
+            if _chunk_accessible(chunk, active_principals=active_principals)
+        ]
+
+    def list_chunks_for_document(
+        self,
+        doc_id: str,
+        *,
+        permissions_enabled: bool,
+        active_principals: list[str],
+        limit: int | None = None,
+    ) -> list[ChunkRecord]:
+        sql = """
+            SELECT *
+            FROM chunks
+            WHERE doc_id = ?
+            ORDER BY chunk_index
+        """
+        params: list[object] = [doc_id]
+        if limit is not None:
+            sql += " LIMIT ?"
+            params.append(limit)
+        with self._connect() as connection:
+            rows = connection.execute(sql, params).fetchall()
+        chunks = [self._row_to_chunk(row) for row in rows]
+        if not permissions_enabled:
+            return chunks
+        return [
+            chunk
+            for chunk in chunks
+            if _chunk_accessible(chunk, active_principals=active_principals)
+        ]
 
     def list_document_sources(self) -> set[str]:
         with self._connect() as connection:
@@ -508,6 +736,7 @@ class SQLiteStore:
         limit: int,
         permissions_enabled: bool,
         active_principals: list[str],
+        doc_ids: list[str] | None = None,
     ) -> list[RetrievalHit]:
         if not query.strip():
             return []
@@ -526,6 +755,12 @@ class SQLiteStore:
                 )
             """
             access_params.extend(active_principals or ["*"])
+        doc_clause = ""
+        doc_params: list[object] = []
+        if doc_ids:
+            placeholders = ", ".join("?" for _ in doc_ids)
+            doc_clause = f" AND chunks.doc_id IN ({placeholders})"
+            doc_params.extend(doc_ids)
         sql = f"""
             SELECT
                 chunks.*,
@@ -534,13 +769,14 @@ class SQLiteStore:
             JOIN chunks ON chunks.rowid = chunk_fts.rowid
             WHERE chunk_fts MATCH ?
             {access_clause}
+            {doc_clause}
             ORDER BY keyword_score ASC
             LIMIT ?
         """
         rows = []
         with self._connect() as connection:
             for fts_query in _keyword_query_candidates(query):
-                params: list[object] = [fts_query, *access_params, limit]
+                params: list[object] = [fts_query, *access_params, *doc_params, limit]
                 rows = connection.execute(sql, params).fetchall()
                 if rows:
                     break
@@ -557,11 +793,108 @@ class SQLiteStore:
             )
         return hits
 
+    def _document_search_catalog(
+        self,
+        *,
+        permissions_enabled: bool,
+        active_principals: list[str],
+    ) -> list[dict[str, object]]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT
+                    documents.doc_id,
+                    documents.title,
+                    documents.source_path,
+                    documents.access_scope,
+                    documents.access_principals,
+                    document_artifacts.normalized_title,
+                    document_artifacts.short_summary,
+                    document_artifacts.section_outline
+                FROM documents
+                LEFT JOIN document_artifacts ON document_artifacts.doc_id = documents.doc_id
+                ORDER BY documents.title COLLATE NOCASE
+                """
+            ).fetchall()
+            entity_rows = connection.execute(
+                """
+                SELECT doc_id, entity_value
+                FROM document_entities
+                ORDER BY doc_id, entity_value COLLATE NOCASE
+                """
+            ).fetchall()
+
+        entity_lookup: dict[str, list[str]] = {}
+        for row in entity_rows:
+            entity_lookup.setdefault(row["doc_id"], []).append(row["entity_value"])
+
+        catalog: list[dict[str, object]] = []
+        for row in rows:
+            access_principals = json.loads(row["access_principals"])
+            if permissions_enabled and not _document_accessible(
+                access_scope=row["access_scope"],
+                access_principals=access_principals,
+                active_principals=active_principals,
+            ):
+                continue
+            catalog.append(
+                {
+                    "doc_id": row["doc_id"],
+                    "title": row["title"],
+                    "source_path": row["source_path"],
+                    "access_scope": row["access_scope"],
+                    "access_principals": access_principals,
+                    "normalized_title": row["normalized_title"] or str(row["title"]).lower(),
+                    "short_summary": row["short_summary"] or "",
+                    "section_outline": json.loads(row["section_outline"]) if row["section_outline"] else [],
+                    "entities": entity_lookup.get(row["doc_id"], []),
+                }
+            )
+        return catalog
+
+    def _catalog_item_to_hit(
+        self,
+        item: dict[str, object],
+        score: float,
+        *,
+        entity_matches: list[str] | None = None,
+    ) -> DocumentSearchHit:
+        return DocumentSearchHit(
+            doc_id=str(item["doc_id"]),
+            title=str(item["title"]),
+            source_path=str(item["source_path"]),
+            access_scope=str(item["access_scope"]),
+            access_principals=list(item["access_principals"]),
+            score=round(score, 3),
+            short_summary=str(item["short_summary"]),
+            section_outline=list(item["section_outline"]),
+            entity_matches=entity_matches or [],
+        )
+
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.database_path)
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys = ON")
         return connection
+
+    def _row_to_document(self, row: sqlite3.Row) -> DocumentMetadata:
+        return DocumentMetadata(
+            doc_id=row["doc_id"],
+            source_path=row["source_path"],
+            content_type=row["content_type"],
+            checksum=row["checksum"],
+            parser_version=row["parser_version"],
+            title=row["title"],
+            ingested_at=row["ingested_at"],
+            access_scope=row["access_scope"],
+            access_principals=json.loads(row["access_principals"]),
+            file_size_bytes=row["file_size_bytes"],
+            modified_at=row["modified_at"],
+            ingest_mode=row["ingest_mode"],
+            ingest_model=row["ingest_model"],
+            ingest_fingerprint=row["ingest_fingerprint"],
+            chunking_strategy=row["chunking_strategy"],
+        )
 
     def _row_to_chunk(self, row: sqlite3.Row) -> ChunkRecord:
         return ChunkRecord(
@@ -600,6 +933,22 @@ class SQLiteStore:
             if column_name in columns:
                 continue
             connection.execute(statement)
+
+
+def _document_accessible(*, access_scope: str, access_principals: list[str], active_principals: list[str]) -> bool:
+    if access_scope == "public":
+        return True
+    if "*" in access_principals:
+        return True
+    return bool(set(access_principals).intersection(active_principals))
+
+
+def _chunk_accessible(chunk: ChunkRecord, *, active_principals: list[str]) -> bool:
+    return _document_accessible(
+        access_scope=chunk.access_scope,
+        access_principals=chunk.access_principals,
+        active_principals=active_principals,
+    )
 
 
 def _to_fts_query(query: str) -> str:

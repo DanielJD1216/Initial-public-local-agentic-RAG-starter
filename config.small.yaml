@@ -35,6 +35,15 @@ retrieval:
   rrf_k: 60
   vector_backend: "faiss"
 
+agent:
+  mode: "middleweight"
+  max_steps: 6
+  max_tool_calls: 8
+  max_rewrites: 2
+  max_subquestions: 3
+  clarification_policy: "single"
+  verification_enabled: true
+
 permissions:
   enabled: false
   default_access_scope: "public"

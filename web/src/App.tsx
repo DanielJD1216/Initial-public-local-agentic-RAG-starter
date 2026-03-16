@@ -354,7 +354,7 @@ export default function App() {
       const payload = await askQuestion(question.trim(), effectivePrincipals);
       startTransition(() => {
         setResult(payload);
-        setStatusMessage(payload.grounded ? "Grounded answer ready." : "Grounding failed cleanly and the answer was withheld.");
+        setStatusMessage(answerStatusMessage(payload));
       });
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "Question failed.");
@@ -415,6 +415,7 @@ export default function App() {
   const bridgeStatus = ingestStatus?.bridge ?? null;
   const corpusIngest = ingestStatus?.corpus ?? null;
   const availableModels = modelDiscovery?.reachable ? modelDiscovery.models : [];
+  const agentStatus = status?.agent ?? null;
   const selectionsAreDiscoverable =
     availableModels.includes(draftChatModel) && availableModels.includes(draftEmbeddingModel) && availableModels.length > 0;
   const comparisonTarget = pendingModelChange ?? activeModelSettings;
@@ -449,6 +450,28 @@ export default function App() {
                   <p className="text-sm leading-6 text-foreground">
                     Swap folders, inspect grounding, and tune the local answer stack without leaving this screen.
                   </p>
+                </div>
+                <div className="rounded-2xl border border-white/70 bg-white/58 p-4 shadow-[0_12px_30px_rgba(15,23,42,0.05)]">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="space-y-1">
+                      <p className="panel-kicker">Agent runtime</p>
+                      <p className="text-sm font-semibold text-foreground">
+                        {agentStatus?.active_mode === "middleweight" ? "Middle-weight planner active" : "Lightweight fallback active"}
+                      </p>
+                      <p className="text-xs leading-5 text-muted-foreground">
+                        Configured: {agentStatus?.configured_mode ?? "loading"} | artifacts:{" "}
+                        {agentStatus?.planning_artifacts_available ? "ready" : "needs reindex"}
+                      </p>
+                    </div>
+                    <Badge variant={agentStatus?.active_mode === "middleweight" ? "success" : "outline"}>
+                      {agentStatus?.active_mode === "middleweight" ? "Middle-weight" : "Lightweight"}
+                    </Badge>
+                  </div>
+                  {agentStatus?.downgrade_reason ? (
+                    <div className="mt-3 rounded-lg border border-amber-200/90 bg-amber-50/85 px-3 py-2 text-xs text-amber-900">
+                      {agentStatus.downgrade_reason}
+                    </div>
+                  ) : null}
                 </div>
                 <MetricGrid status={status} loading={isLoadingStatus} />
                 <div className="space-y-2">
@@ -750,6 +773,9 @@ export default function App() {
                   <Badge variant="secondary" className="bg-white/65">
                     {ingestStatus?.mode === "bridge" ? "Bridge ingest" : "Local ingest"}
                   </Badge>
+                  <Badge variant="secondary" className="bg-white/65">
+                    {agentStatus?.active_mode === "middleweight" ? "Middle-weight agent" : "Lightweight fallback"}
+                  </Badge>
                 </div>
                 <CardTitle className="text-2xl md:text-3xl">Grounded answers, local models, real folder testing.</CardTitle>
                 <CardDescription className="max-w-2xl text-sm leading-6">
@@ -829,15 +855,7 @@ export default function App() {
               <CardHeader>
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div className="flex items-center gap-2">
-                    {deferredResult?.grounded ? (
-                      <Badge variant="success">Grounded</Badge>
-                    ) : deferredResult?.status === "restricted" ? (
-                      <Badge variant="warning">Restricted</Badge>
-                    ) : deferredResult ? (
-                      <Badge variant="warning">Abstained</Badge>
-                    ) : (
-                      <Badge variant="outline">Waiting</Badge>
-                    )}
+                    <Badge variant={answerBadgeVariant(deferredResult)}>{answerBadgeLabel(deferredResult)}</Badge>
                     <CardTitle className="text-base">Answer stream</CardTitle>
                   </div>
                   <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
@@ -851,29 +869,29 @@ export default function App() {
                 </div>
                 <CardDescription>
                   {deferredResult
-                    ? `Status: ${deferredResult.status}`
+                    ? `Status: ${deferredResult.status}${deferredResult.stop_reason ? ` • stop: ${deferredResult.stop_reason}` : ""}`
                     : "Run a query to see the answer, citations, and retrieval trace."}
                 </CardDescription>
               </CardHeader>
               <CardContent>
                 {deferredResult ? (
                   <div className="space-y-4">
-                    {!deferredResult.grounded && deferredResult.status === "restricted" && (
-                      <StatusBanner
-                        tone="error"
-                        message={
-                          deferredResult.blocked_principals.length > 0
-                            ? `Restricted. Your current access view cannot use one or more matching documents. Try Custom and enable: ${deferredResult.blocked_principals.join(", ")}.`
-                            : "Restricted. Your current access view cannot use one or more matching documents."
-                        }
-                      />
-                    )}
-                    {!deferredResult.grounded && deferredResult.status !== "restricted" && (
-                      <StatusBanner
-                        tone="warning"
-                        message="The model found related material but withheld a definitive answer because grounding was insufficient."
-                      />
-                    )}
+                    {!deferredResult.grounded ? (
+                      <StatusBanner tone={answerBannerTone(deferredResult)} message={answerBannerMessage(deferredResult)} />
+                    ) : null}
+                    <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
+                      <Badge variant="outline" className="bg-white/70">
+                        Task {deferredResult.task_mode.replaceAll("_", " ")}
+                      </Badge>
+                      <Badge variant="outline" className="bg-white/70">
+                        Agent {deferredResult.active_mode}
+                      </Badge>
+                      {deferredResult.failure_reason ? (
+                        <Badge variant="outline" className="bg-white/70">
+                          Reason {deferredResult.failure_reason.replaceAll("_", " ")}
+                        </Badge>
+                      ) : null}
+                    </div>
                     <div className="rounded-[1.4rem] border border-white/70 bg-white/68 p-5 text-sm leading-7 text-foreground shadow-[0_16px_40px_rgba(15,23,42,0.06)]">
                       {deferredResult.answer}
                     </div>
@@ -961,11 +979,83 @@ export default function App() {
                   </div>
                 </TabsContent>
                 <TabsContent value="trace" className="min-h-0 flex-1 overflow-auto pr-1">
-                  <div className="rounded-lg border border-border/70 bg-background/45 p-4">
-                    <pre className="overflow-x-auto text-xs leading-6 text-muted-foreground">
-                      {deferredResult ? JSON.stringify(deferredResult.trace, null, 2) : "No trace yet."}
-                    </pre>
-                  </div>
+                  {deferredResult ? (
+                    <div className="space-y-3">
+                      <div className="grid gap-3 md:grid-cols-2">
+                        <div className="rounded-2xl border border-border/70 bg-background/50 p-4">
+                          <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Planner</p>
+                          <p className="mt-2 text-sm text-foreground">
+                            {deferredResult.active_mode} | stop: {deferredResult.stop_reason ?? "n/a"}
+                          </p>
+                          {deferredResult.downgrade_reason ? (
+                            <p className="mt-2 text-xs leading-5 text-muted-foreground">{deferredResult.downgrade_reason}</p>
+                          ) : null}
+                        </div>
+                        <div className="rounded-2xl border border-border/70 bg-background/50 p-4">
+                          <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Verifier</p>
+                          <p className="mt-2 text-sm text-foreground">{deferredResult.verifier_summary?.status ?? "n/a"}</p>
+                          {deferredResult.verifier_summary?.notes?.length ? (
+                            <p className="mt-2 text-xs leading-5 text-muted-foreground">
+                              {deferredResult.verifier_summary.notes.join(" ")}
+                            </p>
+                          ) : null}
+                        </div>
+                      </div>
+                      <div className="rounded-2xl border border-border/70 bg-background/50 p-4">
+                        <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Plan steps</p>
+                        <div className="mt-3 space-y-3">
+                          {deferredResult.plan_summary.length ? (
+                            deferredResult.plan_summary.map((step) => (
+                              <div key={step.step_id} className="rounded-xl border border-border/60 bg-white/55 p-3">
+                                <div className="flex flex-wrap items-center justify-between gap-2">
+                                  <p className="text-sm font-medium text-foreground">{step.title}</p>
+                                  <Badge variant="outline" className="bg-white/70">
+                                    {step.status}
+                                  </Badge>
+                                </div>
+                                {step.subquestion ? <p className="mt-2 text-xs text-muted-foreground">{step.subquestion}</p> : null}
+                                {step.notes.length ? (
+                                  <p className="mt-2 text-xs leading-5 text-muted-foreground">{step.notes.join(" ")}</p>
+                                ) : null}
+                              </div>
+                            ))
+                          ) : (
+                            <p className="text-sm text-muted-foreground">No plan steps recorded.</p>
+                          )}
+                        </div>
+                      </div>
+                      <div className="rounded-2xl border border-border/70 bg-background/50 p-4">
+                        <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Tool events</p>
+                        <div className="mt-3 space-y-3">
+                          {deferredResult.tool_events.length ? (
+                            deferredResult.tool_events.map((event, index) => (
+                              <div key={`${event.tool_name}-${index}`} className="rounded-xl border border-border/60 bg-white/55 p-3">
+                                <div className="flex flex-wrap items-center justify-between gap-2">
+                                  <p className="text-sm font-medium text-foreground">{event.tool_name.replaceAll("_", " ")}</p>
+                                  <Badge variant="outline" className="bg-white/70">
+                                    {event.status}
+                                  </Badge>
+                                </div>
+                                <p className="mt-2 text-xs leading-5 text-muted-foreground">{event.summary}</p>
+                                {event.query ? <p className="mt-2 text-xs text-muted-foreground">query: {event.query}</p> : null}
+                              </div>
+                            ))
+                          ) : (
+                            <p className="text-sm text-muted-foreground">No tool events recorded.</p>
+                          )}
+                        </div>
+                      </div>
+                      <div className="rounded-lg border border-border/70 bg-background/45 p-4">
+                        <pre className="overflow-x-auto text-xs leading-6 text-muted-foreground">
+                          {JSON.stringify(deferredResult.trace, null, 2)}
+                        </pre>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="rounded-lg border border-border/70 bg-background/45 p-4">
+                      <pre className="overflow-x-auto text-xs leading-6 text-muted-foreground">No trace yet.</pre>
+                    </div>
+                  )}
                 </TabsContent>
               </Tabs>
             </CardContent>
@@ -1065,6 +1155,82 @@ function StatusBanner({
       {message}
     </div>
   );
+}
+
+function answerBadgeVariant(result: AskResponse | null): "outline" | "success" | "warning" {
+  if (!result) {
+    return "outline";
+  }
+  if (result.grounded) {
+    return "success";
+  }
+  return result.failure_reason === "restricted" ? "warning" : "outline";
+}
+
+function answerBadgeLabel(result: AskResponse | null) {
+  if (!result) {
+    return "Waiting";
+  }
+  if (result.grounded) {
+    return "Grounded";
+  }
+  if (result.failure_reason === "restricted") {
+    return "Restricted";
+  }
+  if (result.failure_reason === "clarification_required") {
+    return "Needs clarity";
+  }
+  if (result.failure_reason === "conflicting_sources") {
+    return "Conflict";
+  }
+  return "Withheld";
+}
+
+function answerBannerTone(result: AskResponse): "success" | "error" | "warning" {
+  if (result.failure_reason === "restricted") {
+    return "error";
+  }
+  return "warning";
+}
+
+function answerBannerMessage(result: AskResponse) {
+  if (result.failure_reason === "restricted") {
+    return result.blocked_principals.length > 0
+      ? `Restricted. Your current access view cannot use one or more matching documents. Try Custom and enable: ${result.blocked_principals.join(", ")}.`
+      : "Restricted. Your current access view cannot use one or more matching documents.";
+  }
+  if (result.failure_reason === "clarification_required") {
+    return result.clarification_prompt ?? "Clarification is required before the agent can continue.";
+  }
+  if (result.failure_reason === "conflicting_sources") {
+    return "The agent found conflicting evidence across the matching documents, so it withheld a definitive answer.";
+  }
+  if (result.failure_reason === "generation_failure") {
+    return "The runtime gathered evidence, but the active local chat model could not complete a structured grounded answer.";
+  }
+  if (result.failure_reason === "no_evidence") {
+    return "The agent did not collect enough supporting evidence to answer safely.";
+  }
+  if (result.failure_reason === "partial_evidence") {
+    return "The agent found related material, but the evidence was not strong enough to finalize the answer.";
+  }
+  return "The model found related material but withheld a definitive answer because grounding was insufficient.";
+}
+
+function answerStatusMessage(result: AskResponse) {
+  if (result.grounded) {
+    return "Grounded answer ready.";
+  }
+  if (result.failure_reason === "clarification_required") {
+    return "Clarification required before the agent can continue.";
+  }
+  if (result.failure_reason === "restricted") {
+    return "Access prevented the answer from using one or more matching documents.";
+  }
+  if (result.failure_reason === "conflicting_sources") {
+    return "The answer was withheld because the matching documents conflicted.";
+  }
+  return "The answer was withheld cleanly after the planner and verifier checks.";
 }
 
 function ModelSelect({

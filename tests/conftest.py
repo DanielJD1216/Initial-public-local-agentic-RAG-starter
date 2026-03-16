@@ -200,6 +200,15 @@ def write_test_config(
             "rrf_k": 60,
             "vector_backend": "numpy",
         },
+        "agent": {
+            "mode": "middleweight",
+            "max_steps": 6,
+            "max_tool_calls": 8,
+            "max_rewrites": 2,
+            "max_subquestions": 3,
+            "clarification_policy": "single",
+            "verification_enabled": True,
+        },
         "permissions": {
             "enabled": permissions_enabled,
             "default_access_scope": "public",

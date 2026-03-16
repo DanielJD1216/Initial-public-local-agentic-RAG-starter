@@ -70,6 +70,17 @@ class RetrievalSettings:
 
 
 @dataclass(slots=True)
+class AgentSettings:
+    mode: str = "middleweight"
+    max_steps: int = 6
+    max_tool_calls: int = 8
+    max_rewrites: int = 2
+    max_subquestions: int = 3
+    clarification_policy: str = "single"
+    verification_enabled: bool = True
+
+
+@dataclass(slots=True)
 class PermissionSettings:
     enabled: bool = False
     default_access_scope: str = "public"
@@ -120,6 +131,7 @@ class AppConfig:
     local_models: LocalModelSettings
     ingest: IngestSettings
     retrieval: RetrievalSettings
+    agent: AgentSettings
     permissions: PermissionSettings
     ui: UISettings
     web: WebSettings
@@ -169,6 +181,13 @@ def _apply_env_overrides(raw_config: dict[str, Any]) -> dict[str, Any]:
         "RAG_INGEST_CLEANUP": ("ingest.cleanup", _parse_bool),
         "RAG_INGEST_SEMANTIC_CHUNKING": ("ingest.semantic_chunking", _parse_bool),
         "RAG_INGEST_METADATA_ENRICHMENT": ("ingest.metadata_enrichment", _parse_bool),
+        "RAG_AGENT_MODE": ("agent.mode", str),
+        "RAG_AGENT_MAX_STEPS": ("agent.max_steps", int),
+        "RAG_AGENT_MAX_TOOL_CALLS": ("agent.max_tool_calls", int),
+        "RAG_AGENT_MAX_REWRITES": ("agent.max_rewrites", int),
+        "RAG_AGENT_MAX_SUBQUESTIONS": ("agent.max_subquestions", int),
+        "RAG_AGENT_CLARIFICATION_POLICY": ("agent.clarification_policy", str),
+        "RAG_AGENT_VERIFICATION_ENABLED": ("agent.verification_enabled", _parse_bool),
         "RAG_PERMISSION_ENABLED": ("permissions.enabled", _parse_bool),
         "RAG_ACTIVE_PRINCIPALS": ("permissions.active_principals", _parse_list),
         "RAG_AUTO_RESTRICT_ENABLED": ("permissions.auto_restrict_enabled", _parse_bool),
@@ -212,6 +231,7 @@ def load_config(config_path: str | Path | None = None) -> AppConfig:
     local_models = raw_config.get("local_models") or raw_config.get("models", {})
     ingest = raw_config.get("ingest", {})
     retrieval = raw_config.get("retrieval", {})
+    agent = raw_config.get("agent", {})
     permissions = raw_config.get("permissions", {})
     ui = raw_config.get("ui", {})
     web = raw_config.get("web", {})
@@ -254,6 +274,15 @@ def load_config(config_path: str | Path | None = None) -> AppConfig:
             min_evidence_score=float(retrieval.get("min_evidence_score", 0.42)),
             rrf_k=int(retrieval.get("rrf_k", 60)),
             vector_backend=str(retrieval.get("vector_backend", "faiss")),
+        ),
+        agent=AgentSettings(
+            mode=str(agent.get("mode", "middleweight")),
+            max_steps=int(agent.get("max_steps", 6)),
+            max_tool_calls=int(agent.get("max_tool_calls", 8)),
+            max_rewrites=int(agent.get("max_rewrites", 2)),
+            max_subquestions=int(agent.get("max_subquestions", 3)),
+            clarification_policy=str(agent.get("clarification_policy", "single")),
+            verification_enabled=bool(agent.get("verification_enabled", True)),
         ),
         permissions=PermissionSettings(
             enabled=bool(permissions.get("enabled", False)),

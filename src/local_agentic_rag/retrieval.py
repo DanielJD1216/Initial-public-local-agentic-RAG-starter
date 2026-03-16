@@ -32,12 +32,54 @@ class HybridRetriever:
         vectors = self.store.list_embeddings(embedding_model=self.config.models.embedding_model)
         self.vector_index.build(vectors, embedding_model=self.config.models.embedding_model)
 
-    def search(self, query: str, *, query_type: str, active_principals: list[str]) -> RetrievalAttempt:
+    def search(
+        self,
+        query: str,
+        *,
+        query_type: str,
+        active_principals: list[str],
+        doc_ids: list[str] | None = None,
+    ) -> RetrievalAttempt:
         return self._search(
             query,
             query_type=query_type,
             active_principals=active_principals,
             permissions_enabled=self.config.permissions.enabled,
+            doc_ids=doc_ids,
+        )
+
+    def keyword_search(
+        self,
+        query: str,
+        *,
+        query_type: str,
+        active_principals: list[str],
+        doc_ids: list[str] | None = None,
+    ) -> RetrievalAttempt:
+        return self._search(
+            query,
+            query_type=query_type,
+            active_principals=active_principals,
+            permissions_enabled=self.config.permissions.enabled,
+            mode="keyword",
+            doc_ids=doc_ids,
+        )
+
+    def semantic_search(
+        self,
+        query: str,
+        *,
+        query_type: str,
+        active_principals: list[str],
+        doc_ids: list[str] | None = None,
+    ) -> RetrievalAttempt:
+        return self._search(
+            query,
+            query_type=query_type,
+            active_principals=active_principals,
+            permissions_enabled=self.config.permissions.enabled,
+            mode="vector",
+            doc_ids=doc_ids,
         )
 
     def detect_permission_block(self, query: str, *, query_type: str, active_principals: list[str]) -> list[str]:
@@ -48,6 +90,7 @@ class HybridRetriever:
             query_type=query_type,
             active_principals=active_principals,
             permissions_enabled=False,
+            doc_ids=None,
         )
         if not shadow_attempt.fused_hits:
             return []
@@ -65,6 +108,15 @@ class HybridRetriever:
                 blocked_hits.append(hit)
         if not blocked_hits:
             return []
+        if blocked_hits[0].rank == 1:
+            return sorted(
+                {
+                    principal
+                    for hit in blocked_hits
+                    for principal in hit.chunk.access_principals
+                    if principal != "*" and principal not in active_principals
+                }
+            )
         top_blocked_rank = blocked_hits[0].rank
         top_accessible_rank = accessible_hits[0].rank if accessible_hits else 999
         top_blocked_score = blocked_hits[0].score
@@ -93,20 +145,32 @@ class HybridRetriever:
         query_type: str,
         active_principals: list[str],
         permissions_enabled: bool,
+        mode: str = "hybrid",
+        doc_ids: list[str] | None = None,
     ) -> RetrievalAttempt:
-        keyword_hits = self.store.keyword_search(
-            query,
-            limit=self.config.retrieval.keyword_k,
-            permissions_enabled=permissions_enabled,
-            active_principals=active_principals,
+        keyword_hits: list[RetrievalHit] = []
+        vector_hits: list[RetrievalHit] = []
+        if mode in {"hybrid", "keyword"}:
+            keyword_hits = self.store.keyword_search(
+                query,
+                limit=self.config.retrieval.keyword_k,
+                permissions_enabled=permissions_enabled,
+                active_principals=active_principals,
+                doc_ids=doc_ids,
+            )
+        if mode in {"hybrid", "vector"}:
+            query_vector = self.embedding_client.embed_texts([query])[0]
+            vector_hits = self._vector_search(
+                query_vector,
+                active_principals=active_principals,
+                permissions_enabled=permissions_enabled,
+                doc_ids=doc_ids,
+            )
+        fused_hits = (
+            self._fuse_hits(keyword_hits, vector_hits)
+            if mode == "hybrid"
+            else (keyword_hits if mode == "keyword" else vector_hits)
         )
-        query_vector = self.embedding_client.embed_texts([query])[0]
-        vector_hits = self._vector_search(
-            query_vector,
-            active_principals=active_principals,
-            permissions_enabled=permissions_enabled,
-        )
-        fused_hits = self._fuse_hits(keyword_hits, vector_hits)
         evidence_score = _evidence_score(keyword_hits, vector_hits, fused_hits)
         return RetrievalAttempt(
             query=query,
@@ -123,14 +187,18 @@ class HybridRetriever:
         *,
         active_principals: list[str],
         permissions_enabled: bool,
+        doc_ids: list[str] | None = None,
     ) -> list[RetrievalHit]:
         overfetch = max(self.config.retrieval.vector_k * 4, 20)
         raw_hits: list[VectorHit] = self.vector_index.search(query_vector, limit=overfetch)
+        allowed_doc_ids = set(doc_ids or [])
         chunk_lookup = self.store.get_chunks_by_ids([hit.chunk_id for hit in raw_hits])
         filtered: list[RetrievalHit] = []
         for hit in raw_hits:
             chunk = chunk_lookup.get(hit.chunk_id)
             if chunk is None:
+                continue
+            if allowed_doc_ids and chunk.doc_id not in allowed_doc_ids:
                 continue
             if permissions_enabled and not is_accessible(
                 access_scope=chunk.access_scope,

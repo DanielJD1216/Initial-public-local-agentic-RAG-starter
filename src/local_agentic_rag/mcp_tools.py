@@ -13,6 +13,7 @@ class MCPToolset:
     runtime: AppRuntime
 
     def get_runtime_status(self) -> dict[str, object]:
+        agent_status = self.runtime.agent.runtime_status()
         if self.runtime.config.ingest.mode == "bridge":
             bridge_status = discover_ingest_bridge(
                 self.runtime.config.ingest.bridge_base_url,
@@ -40,6 +41,7 @@ class MCPToolset:
                 "bridge": bridge_status if isinstance(bridge_status, dict) else bridge_status.to_dict(),
                 "corpus": self.runtime.store.get_corpus_ingest_summary().to_dict(),
             },
+            "agent": agent_status.to_dict(),
             "permissions_enabled": self.runtime.config.permissions.enabled,
             "default_principals": list(self.runtime.config.permissions.active_principals),
         }
@@ -90,6 +92,9 @@ class MCPToolset:
             "answer": result.answer,
             "grounded": result.grounded,
             "status": result.status,
+            "failure_reason": result.failure_reason,
+            "task_mode": result.task_mode,
+            "stop_reason": result.stop_reason,
             "citations": [citation.to_dict() for citation in result.citations],
         }
         if debug:

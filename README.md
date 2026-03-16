@@ -7,6 +7,7 @@ An opinionated public starter for building a production-quality local agentic RA
 - grounded answers with citations
 - a transparent plain-Python agent loop
 - local Ollama runtime only
+- optional localhost bridge enrichment during ingest
 - CLI, Streamlit, MCP, and a shadcn-style web UI
 
 This repo is intentionally **not** an architecture chooser. It ships one clean default path so people can clone it, run it, and learn from it without re-deciding the stack every time.
@@ -67,8 +68,10 @@ Important defaults:
 - model profile defaults to `balanced`
 - default chat model is `qwen3:8b`
 - default embedding model is `nomic-embed-text`
+- ingest mode defaults to `local`
 - default chat calls disable thinking mode and allow a 300 second read timeout
-- permissions are stored on every record, but enforcement starts disabled
+- permission enforcement is enabled in the shipped `config.yaml`
+- obvious markers like `confidential`, `internal only`, and `restricted` auto-tag documents as restricted for `owners`
 
 You can override key settings through environment variables in `.env`.
 The shipped `.env.example` leaves every override commented out so alternate YAML configs still work as expected after bootstrap.
@@ -111,6 +114,8 @@ Supported sidecar names:
 - `my_doc.pdf.meta.yaml`
 - `my_doc.pdf.meta.yml`
 - `my_doc.pdf.meta.json`
+
+If a document does not have explicit sidecar metadata, the ingest pipeline can still auto-restrict it when the content contains configured sensitivity markers such as `confidential`, `internal only`, or `do not share`.
 
 ## Commands
 
@@ -183,7 +188,9 @@ The web UI is a shadcn-style React shell with:
 - a Codex-like three-pane layout
 - live runtime and corpus metrics
 - browser folder picking plus direct path indexing from the browser
+- session-only local model switching in the browser
 - permission-aware principal controls
+- explicit restricted-access responses when matching documents are blocked by the current access view
 - answer, citations, chunks, and trace inspection in separate panels
 
 To try the newer small model in the web UI later:
@@ -200,6 +207,11 @@ Suggested demo flow:
 3. Switch to `Custom`, enable `owners`, and ask again to show the restricted citation.
 4. Click `Choose folder` to pick a local directory from the browser, or paste a real path and use `Index pasted path`.
 5. Rerun a simple question and confirm the citation switched to the new corpus.
+
+## V1 scope and smoke test
+
+- V1 scope and acceptance gates: [`docs/V1_SCOPE.md`](./docs/V1_SCOPE.md)
+- Fresh-clone verification flow: [`docs/FRESH_CLONE_SMOKE_TEST.md`](./docs/FRESH_CLONE_SMOKE_TEST.md)
 
 ## MCP tools
 
@@ -289,7 +301,7 @@ Try these in order:
 Example:
 
 ```yaml
-models:
+local_models:
   profile: "small"
   chat_model: "qwen3:4b"
   embedding_model: "nomic-embed-text"
@@ -324,6 +336,23 @@ Rebuild the stored embeddings:
 local-rag reindex --force-embeddings
 ```
 
+### The web UI is showing the wrong app or stale data
+
+If `http://127.0.0.1:3000` is serving an unexpected config or old corpus, another dev server may already be listening on that port.
+
+Check the listener:
+
+```bash
+lsof -n -P -iTCP:3000 -sTCP:LISTEN
+```
+
+Then stop the stale process and restart the server from the current repo:
+
+```bash
+source .venv/bin/activate
+local-rag serve-web
+```
+
 ## Runtime promise
 
-After setup, the app is designed to run locally through Ollama with no ongoing API calls. The automated tests in this repo run against fake local model clients so they stay deterministic and do not require network access.
+After setup, the default runtime is designed to run locally through Ollama with no ongoing API calls during retrieval or answer generation. If `ingest.mode` is switched to `bridge`, document content may leave the machine during ingest-time enrichment. The automated tests in this repo run against fake local model clients so they stay deterministic and do not require network access.

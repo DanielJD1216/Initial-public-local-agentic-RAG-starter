@@ -29,6 +29,26 @@ def fake_ollama_discoverer(base_url: str | None, *, timeout_seconds: int = 5) ->
     )
 
 
+def fake_aliasing_ollama_discoverer(base_url: str | None, *, timeout_seconds: int = 5) -> OllamaDiscoveryResult:
+    del timeout_seconds
+    normalized = normalize_ollama_base_url(base_url)
+    model_map = {
+        "http://127.0.0.1:11434": ["fake-chat", "fake-embed:latest"],
+    }
+    if normalized not in model_map:
+        return OllamaDiscoveryResult(
+            base_url=normalized,
+            reachable=False,
+            models=[],
+            error=f"Could not reach Ollama at {normalized}.",
+        )
+    return OllamaDiscoveryResult(
+        base_url=normalized,
+        reachable=True,
+        models=model_map[normalized],
+    )
+
+
 def fake_bridge_health_checker(base_url: str | None, *, model: str, timeout_seconds: int = 5) -> BridgeHealthResult:
     del timeout_seconds
     normalized = normalize_bridge_base_url(base_url)
@@ -61,6 +81,7 @@ def test_web_server_status_ingest_and_permission_flow(tmp_path) -> None:
     assert status_before.json()["local_models"]["ollama"]["reachable"]
     assert status_before.json()["ingest"]["mode"] == "local"
     assert status_before.json()["ingest"]["corpus"]["mode"] is None
+    assert status_before.json()["agent"]["configured_mode"] == "middleweight"
     assert status_before.json()["suggested_prompts"]
 
     ingest_response = client.post("/api/ingest", json={"documents_path": str(docs_path)})
@@ -83,6 +104,7 @@ def test_web_server_status_ingest_and_permission_flow(tmp_path) -> None:
     assert blocked.status_code == 200
     assert not blocked.json()["grounded"]
     assert blocked.json()["status"] == "restricted"
+    assert blocked.json()["failure_reason"] == "restricted"
     assert blocked.json()["blocked_principals"] == ["finance", "owners"]
 
     allowed = client.post(
@@ -164,6 +186,7 @@ def test_web_server_model_settings_flow_supports_discovery_apply_reload_and_rein
     assert initial_status.json()["local_models"]["active"]["chat_model"] == "fake-chat"
     assert initial_status.json()["local_models"]["active"]["embedding_model"] == "fake-embed"
     assert initial_status.json()["local_models"]["source"] == "config"
+    assert initial_status.json()["agent"]["configured_mode"] == "middleweight"
 
     discover = client.post("/api/model-settings/discover", json={"base_url": "127.0.0.1:22434"})
     assert discover.status_code == 200
@@ -296,6 +319,37 @@ def test_web_server_reports_unreachable_ollama_discovery(tmp_path) -> None:
     assert "Could not reach Ollama" in discover.json()["error"]
 
 
+def test_web_server_normalizes_latest_model_aliases_in_status_and_apply(tmp_path) -> None:
+    _runtime, config_path, _docs_path = build_test_runtime(tmp_path, permissions_enabled=False)
+    manager = WebRuntimeManager(
+        config_path=config_path,
+        ollama_discoverer=fake_aliasing_ollama_discoverer,
+        bridge_health_checker=fake_bridge_health_checker,
+        embedding_client=FakeEmbeddingClient(),
+        chat_client=FakeChatClient(),
+    )
+    app = create_web_app(config_path=config_path, manager=manager)
+    client = TestClient(app)
+
+    initial_status = client.get("/api/status")
+    assert initial_status.status_code == 200
+    assert initial_status.json()["local_models"]["active"]["embedding_model"] == "fake-embed:latest"
+
+    apply_response = client.post(
+        "/api/model-settings/apply",
+        json={
+            "base_url": "127.0.0.1:11434",
+            "chat_model": "fake-chat",
+            "embedding_model": "fake-embed:latest",
+        },
+    )
+    assert apply_response.status_code == 200
+    payload = apply_response.json()
+    assert payload["applied"]
+    assert not payload["reindex_required"]
+    assert payload["status"]["local_models"]["source"] == "config"
+
+
 def test_web_server_reports_bridge_ingest_status_and_local_answers(tmp_path) -> None:
     bridge_client = FakeBridgeEnrichmentClient()
     _runtime, config_path, docs_path = build_test_runtime(
@@ -319,6 +373,7 @@ def test_web_server_reports_bridge_ingest_status_and_local_answers(tmp_path) -> 
     assert initial_status.status_code == 200
     assert initial_status.json()["ingest"]["mode"] == "bridge"
     assert initial_status.json()["ingest"]["bridge"]["reachable"]
+    assert initial_status.json()["agent"]["configured_mode"] == "middleweight"
 
     bridge_health = client.get("/api/ingest/bridge-health")
     assert bridge_health.status_code == 200

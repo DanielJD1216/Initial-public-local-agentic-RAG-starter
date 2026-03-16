@@ -9,7 +9,13 @@ from typing import Callable
 from .clients import ChatClient, EmbeddingClient
 from .config import AppConfig, load_config
 from .ingest_bridge import BridgeHealthResult, IngestEnrichmentClient, discover_ingest_bridge, normalize_bridge_base_url
-from .ollama_admin import OllamaDiscoveryResult, discover_ollama_models, normalize_ollama_base_url
+from .ollama_admin import (
+    OllamaDiscoveryResult,
+    discover_ollama_models,
+    normalize_ollama_base_url,
+    ollama_models_equivalent,
+    resolve_ollama_model_name,
+)
 from .models import PromptSuggestion
 from .prompt_suggestions import build_prompt_suggestions, default_prompt_suggestions
 from .service import AppRuntime, build_runtime_from_config
@@ -35,8 +41,8 @@ class ModelSettingsSelection:
     def matches(self, other: "ModelSettingsSelection") -> bool:
         return (
             self.base_url == other.base_url
-            and self.chat_model == other.chat_model
-            and self.embedding_model == other.embedding_model
+            and ollama_models_equivalent(self.chat_model, other.chat_model)
+            and ollama_models_equivalent(self.embedding_model, other.embedding_model)
         )
 
 
@@ -70,15 +76,17 @@ class WebRuntimeManager:
     def status_payload(self) -> dict[str, object]:
         corpus = self.runtime.store.get_corpus_summary()
         ingest_summary = self.runtime.store.get_corpus_ingest_summary()
-        active_selection = self._current_model_selection()
-        discovery = self._discover_ollama(active_selection.base_url)
+        agent_status = self.runtime.agent.runtime_status()
+        current_selection = self._current_model_selection()
+        discovery = self._discover_ollama(current_selection.base_url)
+        active_selection = self._canonicalize_model_selection(current_selection, discovery.models)
         suggested_prompts = self._suggested_prompts(
             principals=list(self.runtime.config.permissions.active_principals),
         )
         local_models_payload = {
             "active": active_selection.to_dict(source=self._current_model_source()),
             "source": self._current_model_source(),
-            "pending_reindex": self._pending_model_payload(),
+            "pending_reindex": self._pending_model_payload(discovery.models),
             "ollama": discovery.to_dict(),
         }
         return {
@@ -94,6 +102,7 @@ class WebRuntimeManager:
                 "bridge": self._current_bridge_status().to_dict(),
                 "corpus": ingest_summary.to_dict(),
             },
+            "agent": agent_status.to_dict(),
             "permissions_enabled": self.runtime.config.permissions.enabled,
             "default_principals": list(self.runtime.config.permissions.active_principals),
             "corpus": corpus.to_dict(),
@@ -128,7 +137,11 @@ class WebRuntimeManager:
                 embedding_model=embedding_model,
             )
             active_selection = self._current_model_selection()
-            if requested_selection.embedding_model != active_selection.embedding_model:
+            embedding_changed = not ollama_models_equivalent(
+                requested_selection.embedding_model,
+                active_selection.embedding_model,
+            )
+            if embedding_changed:
                 self._pending_model_selection = requested_selection
                 return {
                     "status": self.status_payload(),
@@ -327,11 +340,16 @@ class WebRuntimeManager:
             profile="custom",
         )
 
-    def _pending_model_payload(self) -> dict[str, object] | None:
+    def _pending_model_payload(self, available_models: list[str] | None = None) -> dict[str, object] | None:
         if self._pending_model_selection is None:
             return None
+        selection = (
+            self._canonicalize_model_selection(self._pending_model_selection, available_models or [])
+            if available_models
+            else self._pending_model_selection
+        )
         target_source = "config" if self._selection_to_session_override(self._pending_model_selection) is None else "session"
-        return self._pending_model_selection.to_dict(source=target_source)
+        return selection.to_dict(source=target_source)
 
     def _validated_model_selection(
         self,
@@ -344,20 +362,36 @@ class WebRuntimeManager:
         if not discovery.reachable:
             raise ValueError(discovery.error or f"Could not reach Ollama at {discovery.base_url}.")
         available_models = set(discovery.models)
+        resolved_chat_model = resolve_ollama_model_name(chat_model, discovery.models)
+        resolved_embedding_model = resolve_ollama_model_name(embedding_model, discovery.models)
         if not chat_model.strip():
             raise ValueError("Choose a chat model before applying session settings.")
         if not embedding_model.strip():
             raise ValueError("Choose an embedding model before applying session settings.")
-        if chat_model not in available_models:
+        if resolved_chat_model not in available_models:
             raise ValueError(f"Chat model `{chat_model}` is not installed on {discovery.base_url}.")
-        if embedding_model not in available_models:
+        if resolved_embedding_model not in available_models:
             raise ValueError(f"Embedding model `{embedding_model}` is not installed on {discovery.base_url}.")
         profile = self._config_model_selection().profile
         return ModelSettingsSelection(
             base_url=discovery.base_url,
-            chat_model=chat_model,
-            embedding_model=embedding_model,
+            chat_model=resolved_chat_model,
+            embedding_model=resolved_embedding_model,
             profile=profile,
+        )
+
+    def _canonicalize_model_selection(
+        self,
+        selection: ModelSettingsSelection,
+        available_models: list[str],
+    ) -> ModelSettingsSelection:
+        if not available_models:
+            return selection
+        return ModelSettingsSelection(
+            base_url=selection.base_url,
+            chat_model=resolve_ollama_model_name(selection.chat_model, available_models),
+            embedding_model=resolve_ollama_model_name(selection.embedding_model, available_models),
+            profile=selection.profile,
         )
 
     def _suggested_prompts(self, *, principals: list[str]) -> list[PromptSuggestion]:

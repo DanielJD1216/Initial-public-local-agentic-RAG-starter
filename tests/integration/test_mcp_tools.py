@@ -14,6 +14,7 @@ def test_mcp_tool_responses(tmp_path) -> None:
     status_result = toolset.get_runtime_status()
     assert status_result["local_models"]["chat_model"] == "fake-chat"
     assert status_result["ingest"]["mode"] == "local"
+    assert status_result["agent"]["configured_mode"] == "middleweight"
 
     search_result = toolset.search_documents("support escalation path", principals=["*"])
     assert search_result["hits"]
@@ -24,4 +25,5 @@ def test_mcp_tool_responses(tmp_path) -> None:
 
     answer_result = toolset.ask_with_citations("Who owns support escalations?", principals=["*"], debug=True)
     assert answer_result["citations"]
+    assert answer_result["task_mode"] in {"simple_lookup", "ownership_policy", "cross_document_analysis"}
     assert "trace" in answer_result
